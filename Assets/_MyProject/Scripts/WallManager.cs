@@ -16,6 +16,9 @@ namespace MyProject
         [Tooltip("The triangle sprite to represent spikes. Assigned programmatically by the scene builder.")]
         public Sprite spikeSprite;
 
+        [Tooltip("Vertical distance threshold within which opposite wall spikes are considered at the same Y position.")]
+        [SerializeField] private float sameYSpikeThreshold = 2.2f;
+
         private List<Transform> leftWallSegments = new List<Transform>();
         private List<Transform> rightWallSegments = new List<Transform>();
 
@@ -87,6 +90,9 @@ namespace MyProject
                 PositionSpikesForSegment(false, i, rightY);
             }
 
+            // Run initial validation to ensure no dual-spike blockages exist
+            ValidateSpikePositions();
+
             Debug.Log("Successfully initialized infinite wall pools and hazards (3 segments, 6 spikes per side).");
         }
 
@@ -101,6 +107,9 @@ namespace MyProject
 
             // Recycle right wall segments & hazards
             RecycleWallListIfBelowThreshold(rightWallSegments, recycleThresholdY, false);
+
+            // Enforce that active spikes on opposing walls at the same Y position must have a middle platform
+            ValidateSpikePositions();
         }
 
         private void RecycleWallListIfBelowThreshold(List<Transform> segments, float thresholdY, bool isLeft)
@@ -156,6 +165,7 @@ namespace MyProject
                     renderer.sprite = spikeSprite;
                 }
                 renderer.color = new Color(0.75f, 0.25f, 0.25f, 1f); // Warning dark red/metallic hazard tint
+                renderer.sortingOrder = 5;
 
                 // Add standard solid collider matching the triangle shape (cat will collide physically)
                 PolygonCollider2D polygonCollider = spikeGo.AddComponent<PolygonCollider2D>();
@@ -188,14 +198,133 @@ namespace MyProject
             // Randomize Y in two separate halves of the segment to keep them nicely spaced.
 
             // Spike 1 (Lower half of the segment)
-            float y1 = segmentY + Random.Range(-4.0f, -1.0f);
-            spikes[0].transform.position = new Vector3(targetX, y1, 0f);
-            spikes[0].SetActive(Random.value <= 0.5f); // 50% activation rate for random interval patterns
+            PositionSingleSpike(spikes[0], targetX, segmentY - 4.0f, segmentY - 1.0f, isLeft);
 
             // Spike 2 (Upper half of the segment)
-            float y2 = segmentY + Random.Range(1.0f, 4.0f);
-            spikes[1].transform.position = new Vector3(targetX, y2, 0f);
-            spikes[1].SetActive(Random.value <= 0.5f);
+            PositionSingleSpike(spikes[1], targetX, segmentY + 1.0f, segmentY + 4.0f, isLeft);
+        }
+
+        private void PositionSingleSpike(GameObject spike, float targetX, float minY, float maxY, bool isLeft)
+        {
+            bool wantsActive = Random.value <= 0.5f;
+            if (!wantsActive)
+            {
+                float defaultY = (minY + maxY) * 0.5f;
+                spike.transform.position = new Vector3(targetX, defaultY, 0f);
+                spike.SetActive(false);
+                return;
+            }
+
+            // Try up to 10 attempts to find a candidate position that doesn't create an impassable dual-spike barrier
+            for (int attempt = 0; attempt < 10; attempt++)
+            {
+                float candidateY = Random.Range(minY, maxY);
+
+                if (IsConflictWithOppositeSpike(candidateY, isLeft, out float oppY))
+                {
+                    float checkMinY = Mathf.Min(candidateY, oppY) - 1.5f;
+                    float checkMaxY = Mathf.Max(candidateY, oppY) + 1.5f;
+
+                    if (HasMiddlePlatformNear(checkMinY, checkMaxY))
+                    {
+                        // Middle platform exists, candidate Y is valid!
+                        spike.transform.position = new Vector3(targetX, candidateY, 0f);
+                        spike.SetActive(true);
+                        return;
+                    }
+                    // Conflict exists and no middle platform, try another candidate Y
+                }
+                else
+                {
+                    // No conflict with opposite spike!
+                    spike.transform.position = new Vector3(targetX, candidateY, 0f);
+                    spike.SetActive(true);
+                    return;
+                }
+            }
+
+            // Fallback: If no candidate Y in range resolves the conflict without a middle platform, deactivate spike
+            float fallbackY = Random.Range(minY, maxY);
+            spike.transform.position = new Vector3(targetX, fallbackY, 0f);
+            spike.SetActive(false);
+        }
+
+        private bool IsConflictWithOppositeSpike(float candidateY, bool isCandidateLeft, out float conflictingOppositeY)
+        {
+            conflictingOppositeY = 0f;
+            List<List<GameObject>> oppositeSpikesList = isCandidateLeft ? rightSpikesList : leftSpikesList;
+
+            for (int seg = 0; seg < oppositeSpikesList.Count; seg++)
+            {
+                List<GameObject> segmentSpikes = oppositeSpikesList[seg];
+                for (int i = 0; i < segmentSpikes.Count; i++)
+                {
+                    GameObject oppSpike = segmentSpikes[i];
+                    if (oppSpike != null && oppSpike.activeInHierarchy)
+                    {
+                        float oppY = oppSpike.transform.position.y;
+                        if (Mathf.Abs(candidateY - oppY) < sameYSpikeThreshold)
+                        {
+                            conflictingOppositeY = oppY;
+                            return true;
+                        }
+                    }
+                }
+            }
+            return false;
+        }
+
+        private bool HasMiddlePlatformNear(float minY, float maxY)
+        {
+            PlatformManager pm = PlatformManager.Instance;
+            if (pm == null)
+            {
+                pm = FindFirstObjectByType<PlatformManager>();
+            }
+            if (pm != null)
+            {
+                return pm.HasMiddlePlatformNearY(minY, maxY);
+            }
+            return false;
+        }
+
+        private void ValidateSpikePositions()
+        {
+            for (int lSeg = 0; lSeg < leftSpikesList.Count; lSeg++)
+            {
+                List<GameObject> leftSegmentSpikes = leftSpikesList[lSeg];
+                for (int l = 0; l < leftSegmentSpikes.Count; l++)
+                {
+                    GameObject leftSpike = leftSegmentSpikes[l];
+                    if (leftSpike == null || !leftSpike.activeInHierarchy) continue;
+
+                    float ly = leftSpike.transform.position.y;
+
+                    for (int rSeg = 0; rSeg < rightSpikesList.Count; rSeg++)
+                    {
+                        List<GameObject> rightSegmentSpikes = rightSpikesList[rSeg];
+                        for (int r = 0; r < rightSegmentSpikes.Count; r++)
+                        {
+                            GameObject rightSpike = rightSegmentSpikes[r];
+                            if (rightSpike == null || !rightSpike.activeInHierarchy) continue;
+
+                            float ry = rightSpike.transform.position.y;
+
+                            if (Mathf.Abs(ly - ry) < sameYSpikeThreshold)
+                            {
+                                float minY = Mathf.Min(ly, ry) - 1.5f;
+                                float maxY = Mathf.Max(ly, ry) + 1.5f;
+
+                                if (!HasMiddlePlatformNear(minY, maxY))
+                                {
+                                    // Deactivate right spike to break impossible dual-spike barrier without middle platform
+                                    rightSpike.SetActive(false);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 }
