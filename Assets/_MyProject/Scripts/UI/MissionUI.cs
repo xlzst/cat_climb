@@ -12,6 +12,7 @@ namespace MyProject.UI
         public string description;
         public int targetValue;
         public string rewardText;
+        public int rewardCoins;
         public MissionType type;
     }
 
@@ -32,11 +33,11 @@ namespace MyProject.UI
 
         public static readonly List<MissionItem> AvailableMissions = new List<MissionItem>
         {
-            new MissionItem { id = "climb_30", title = "First Climb", description = "Reach 30 FT in height", targetValue = 30, rewardText = "50 Coins", type = MissionType.ReachHeight },
-            new MissionItem { id = "climb_100", title = "High Climber", description = "Reach 100 FT in height", targetValue = 100, rewardText = "100 Coins", type = MissionType.ReachHeight },
-            new MissionItem { id = "climb_250", title = "Sky Master", description = "Reach 250 FT in height", targetValue = 250, rewardText = "Golden Paw", type = MissionType.ReachHeight },
-            new MissionItem { id = "play_3", title = "Persistent Cat", description = "Play 3 climb runs", targetValue = 3, rewardText = "75 Coins", type = MissionType.PlayRuns },
-            new MissionItem { id = "defeat_3", title = "Mouse Hunter", description = "Defeat 3 Enemy Mice", targetValue = 3, rewardText = "Hunter Ribbon", type = MissionType.DefeatEnemies }
+            new MissionItem { id = "climb_30", title = "First Climb", description = "Reach 30 FT in height", targetValue = 30, rewardText = "50 Coins", rewardCoins = 50, type = MissionType.ReachHeight },
+            new MissionItem { id = "climb_100", title = "High Climber", description = "Reach 100 FT in height", targetValue = 100, rewardText = "100 Coins", rewardCoins = 100, type = MissionType.ReachHeight },
+            new MissionItem { id = "climb_250", title = "Sky Master", description = "Reach 250 FT in height", targetValue = 250, rewardText = "250 Coins", rewardCoins = 250, type = MissionType.ReachHeight },
+            new MissionItem { id = "play_3", title = "Persistent Cat", description = "Play 3 climb runs", targetValue = 3, rewardText = "75 Coins", rewardCoins = 75, type = MissionType.PlayRuns },
+            new MissionItem { id = "defeat_3", title = "Mouse Hunter", description = "Defeat 3 Enemy Mice", targetValue = 3, rewardText = "150 Coins", rewardCoins = 150, type = MissionType.DefeatEnemies }
         };
 
         private List<Button> claimButtons = new List<Button>();
@@ -158,14 +159,25 @@ namespace MyProject.UI
 
         public void ClaimMission(string missionId)
         {
+            var mission = AvailableMissions.Find(m => m.id == missionId);
+            if (mission != null && mission.rewardCoins > 0)
+            {
+                if (GameManager.Instance != null)
+                {
+                    GameManager.Instance.AddCoins(mission.rewardCoins);
+                }
+            }
+
             PlayerPrefs.SetInt($"CatClimb_Mission_Claimed_{missionId}", 1);
             PlayerPrefs.Save();
-            Debug.Log($"[MissionUI] Claimed mission reward for: {missionId}");
+            Debug.Log($"[MissionUI] Claimed mission reward for: {missionId} (Coins: {mission?.rewardCoins})");
+            AudioManager.Instance?.PlayStreak();
             RefreshUI();
         }
 
         private void OnBackClicked()
         {
+            AudioManager.Instance?.PlayClick();
             Hide();
             if (UIManager.Instance != null)
             {

@@ -28,23 +28,45 @@ namespace MyProject
 
         private Transform cameraTransform;
 
+        public static WallManager Instance { get; private set; }
+
+        private void Awake()
+        {
+            if (Instance == null)
+            {
+                Instance = this;
+            }
+        }
+
+        private void OnDestroy()
+        {
+            if (Instance == this)
+            {
+                Instance = null;
+            }
+        }
+
+        public void EnsureInitialized()
+        {
+            if (leftWallSegments.Count == 0)
+            {
+                if (cameraTransform == null && Camera.main != null)
+                {
+                    cameraTransform = Camera.main.transform;
+                }
+                SetupWallPools();
+            }
+        }
+
         private void Start()
         {
-            if (Camera.main != null)
-            {
-                cameraTransform = Camera.main.transform;
-            }
-            else
-            {
-                Debug.LogError("Main Camera not found! WallManager requires a Main Camera.");
-                return;
-            }
-
-            SetupWallPools();
+            EnsureInitialized();
         }
 
         private void SetupWallPools()
         {
+            if (leftWallSegments.Count > 0) return;
+
             GameObject initialLeft = GameObject.Find("LeftWall");
             GameObject initialRight = GameObject.Find("RightWall");
 
@@ -204,6 +226,108 @@ namespace MyProject
             PositionSingleSpike(spikes[1], targetX, segmentY + 1.0f, segmentY + 4.0f, isLeft);
         }
 
+        /// <summary>
+        /// Checks if any active spike is within clearance distance of the specified world coordinates.
+        /// Accounts for wall side (left wall spikes if worldX <= 0.5f, right wall spikes if worldX >= -0.5f).
+        /// </summary>
+        public bool IsSpikeNear(float worldX, float worldY, float verticalClearance = 1.35f)
+        {
+            if (worldX <= 0.5f)
+            {
+                if (CheckSpikesInList(leftSpikesList, worldX, worldY, verticalClearance)) return true;
+            }
+            if (worldX >= -0.5f)
+            {
+                if (CheckSpikesInList(rightSpikesList, worldX, worldY, verticalClearance)) return true;
+            }
+            return false;
+        }
+
+        private bool CheckSpikesInList(List<List<GameObject>> spikesList, float worldX, float worldY, float clearance)
+        {
+            for (int seg = 0; seg < spikesList.Count; seg++)
+            {
+                List<GameObject> segmentSpikes = spikesList[seg];
+                for (int i = 0; i < segmentSpikes.Count; i++)
+                {
+                    GameObject spike = segmentSpikes[i];
+                    if (spike != null && spike.activeInHierarchy)
+                    {
+                        Vector3 spikePos = spike.transform.position;
+                        if (Mathf.Abs(worldX - spikePos.x) < 1.4f && Mathf.Abs(worldY - spikePos.y) < clearance)
+                        {
+                            return true;
+                        }
+                    }
+                }
+            }
+            return false;
+        }
+
+        private bool IsConflictWithItemOrPlatform(float candidateY, bool isLeft)
+        {
+            // 1. Check against active FishTreats
+            for (int i = 0; i < FishTreat.ActiveFishTreats.Count; i++)
+            {
+                FishTreat treat = FishTreat.ActiveFishTreats[i];
+                if (treat != null && treat.gameObject.activeInHierarchy)
+                {
+                    Vector3 treatPos = treat.transform.position;
+                    bool onSameSide = isLeft ? (treatPos.x < -1.0f) : (treatPos.x > 1.0f);
+                    if (onSameSide && Mathf.Abs(candidateY - treatPos.y) < 1.35f)
+                    {
+                        return true;
+                    }
+                }
+            }
+
+            // 2. Check against active MagnetItems
+            for (int i = 0; i < MagnetItem.ActiveMagnetItems.Count; i++)
+            {
+                MagnetItem magnet = MagnetItem.ActiveMagnetItems[i];
+                if (magnet != null && magnet.gameObject.activeInHierarchy)
+                {
+                    Vector3 magnetPos = magnet.transform.position;
+                    bool onSameSide = isLeft ? (magnetPos.x < -1.0f) : (magnetPos.x > 1.0f);
+                    if (onSameSide && Mathf.Abs(candidateY - magnetPos.y) < 1.35f)
+                    {
+                        return true;
+                    }
+                }
+            }
+
+            // 3. Check against active platforms touching or close to this wall
+            PlatformManager pm = PlatformManager.Instance;
+            if (pm != null && pm.PlatformPool != null)
+            {
+                for (int i = 0; i < pm.PlatformPool.Count; i++)
+                {
+                    GameObject plat = pm.PlatformPool[i];
+                    if (plat != null && plat.activeInHierarchy)
+                    {
+                        Vector3 platPos = plat.transform.position;
+                        Vector3 platScale = plat.transform.localScale;
+                        float platHalfWidth = (platScale.x * 1.28f) * 0.5f;
+                        float platHalfHeight = (platScale.y * 1.28f) * 0.5f;
+
+                        bool isNearThisWall = isLeft 
+                            ? ((platPos.x - platHalfWidth) < -2.0f) 
+                            : ((platPos.x + platHalfWidth) > 2.0f);
+
+                        if (isNearThisWall)
+                        {
+                            if (Mathf.Abs(candidateY - platPos.y) < (platHalfHeight + 0.6f))
+                            {
+                                return true;
+                            }
+                        }
+                    }
+                }
+            }
+
+            return false;
+        }
+
         private void PositionSingleSpike(GameObject spike, float targetX, float minY, float maxY, bool isLeft)
         {
             bool wantsActive = Random.value <= 0.5f;
@@ -215,10 +339,16 @@ namespace MyProject
                 return;
             }
 
-            // Try up to 10 attempts to find a candidate position that doesn't create an impassable dual-spike barrier
-            for (int attempt = 0; attempt < 10; attempt++)
+            // Try up to 12 attempts to find a candidate position that doesn't create an impassable dual-spike barrier or overlap items/platforms
+            for (int attempt = 0; attempt < 12; attempt++)
             {
                 float candidateY = Random.Range(minY, maxY);
+
+                // Spatial exclusion: Never place a spike where a collectible or platform already sits
+                if (IsConflictWithItemOrPlatform(candidateY, isLeft))
+                {
+                    continue;
+                }
 
                 if (IsConflictWithOppositeSpike(candidateY, isLeft, out float oppY))
                 {
@@ -320,6 +450,59 @@ namespace MyProject
                                     // Deactivate right spike to break impossible dual-spike barrier without middle platform
                                     rightSpike.SetActive(false);
                                 }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Prevent active spikes from overlapping any active FishTreat or MagnetItem
+            ValidateSpikesAgainstItems(leftSpikesList, true);
+            ValidateSpikesAgainstItems(rightSpikesList, false);
+        }
+
+        private void ValidateSpikesAgainstItems(List<List<GameObject>> spikesList, bool isLeft)
+        {
+            for (int seg = 0; seg < spikesList.Count; seg++)
+            {
+                List<GameObject> segmentSpikes = spikesList[seg];
+                for (int i = 0; i < segmentSpikes.Count; i++)
+                {
+                    GameObject spike = segmentSpikes[i];
+                    if (spike == null || !spike.activeInHierarchy) continue;
+
+                    float sy = spike.transform.position.y;
+
+                    // 1. Check against active FishTreats
+                    for (int f = 0; f < FishTreat.ActiveFishTreats.Count; f++)
+                    {
+                        FishTreat treat = FishTreat.ActiveFishTreats[f];
+                        if (treat != null && treat.gameObject.activeInHierarchy)
+                        {
+                            Vector3 ty = treat.transform.position;
+                            bool onSameSide = isLeft ? (ty.x < -1.0f) : (ty.x > 1.0f);
+                            if (onSameSide && Mathf.Abs(sy - ty.y) < 1.35f)
+                            {
+                                spike.SetActive(false);
+                                break;
+                            }
+                        }
+                    }
+
+                    if (!spike.activeInHierarchy) continue;
+
+                    // 2. Check against active MagnetItems
+                    for (int m = 0; m < MagnetItem.ActiveMagnetItems.Count; m++)
+                    {
+                        MagnetItem magnet = MagnetItem.ActiveMagnetItems[m];
+                        if (magnet != null && magnet.gameObject.activeInHierarchy)
+                        {
+                            Vector3 my = magnet.transform.position;
+                            bool onSameSide = isLeft ? (my.x < -1.0f) : (my.x > 1.0f);
+                            if (onSameSide && Mathf.Abs(sy - my.y) < 1.35f)
+                            {
+                                spike.SetActive(false);
+                                break;
                             }
                         }
                     }

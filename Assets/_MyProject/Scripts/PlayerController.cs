@@ -1,6 +1,7 @@
 using UnityEngine;
 using UnityEngine.InputSystem;
 using UnityEngine.EventSystems;
+using MyProject.UI;
 
 namespace MyProject
 {
@@ -8,6 +9,20 @@ namespace MyProject
     [RequireComponent(typeof(CircleCollider2D))]
     public class PlayerController : MonoBehaviour
     {
+        public static PlayerController Instance
+        {
+            get
+            {
+                if (instance == null)
+                {
+                    instance = Object.FindFirstObjectByType<PlayerController>();
+                }
+                return instance;
+            }
+            private set => instance = value;
+        }
+        private static PlayerController instance;
+
         [Header("Movement Settings")]
         [Tooltip("The speed of horizontal movement.")]
         [SerializeField] private float moveSpeed = 5f;
@@ -25,9 +40,28 @@ namespace MyProject
         [Tooltip("If true, inverts the tilt direction.")]
         [SerializeField] private bool invertTilt = false;
 
-        [Header("Climbing Settings")]
+        [Header("Climbing & Wall Locomotion Settings")]
         [Tooltip("The speed of vertical climbing on walls.")]
-        [SerializeField] private float climbSpeed = 3f;
+        [SerializeField] private float climbSpeed = 3.5f;
+
+        [Tooltip("The downward slide speed when sliding along a wall.")]
+        [SerializeField] private float wallSlideSpeed = -2f;
+
+        [Tooltip("Horizontal impulse applied during a wall kick.")]
+        [SerializeField] private float wallKickForceX = 6.5f;
+
+        [Tooltip("Vertical impulse applied during a wall kick.")]
+        [SerializeField] private float wallKickForceY = 7.5f;
+
+        [Header("Touch & Drag Steering Settings")]
+        [Tooltip("Responsiveness multiplier for following finger/pointer horizontally.")]
+        [SerializeField] private float dragResponsiveness = 8f;
+
+        [Tooltip("Minimum swipe distance in pixels to trigger a swipe gesture.")]
+        [SerializeField] private float minSwipeDistance = 35f;
+
+        [Tooltip("Maximum duration in seconds for a gesture to be considered a swipe.")]
+        [SerializeField] private float maxSwipeDuration = 0.35f;
 
         [Header("Jump Settings")]
         [Tooltip("The vertical force applied when jumping.")]
@@ -121,6 +155,12 @@ namespace MyProject
         private readonly WaitForSeconds walkToJumpDelay = new WaitForSeconds(0.07f);
         private bool wasGrounded;
 
+        [Header("Squash & Stretch Juice")]
+        [SerializeField] private float squashRecoverySpeed = 14f;
+        private readonly Vector3 baseVisualScale = new Vector3(0.5f, 0.5f, 1f);
+        private float lastVerticalVelocity = 0f;
+        private int comboCount = 0;
+
         private Rigidbody2D rb;
         private CircleCollider2D circleCollider;
         private SpriteRenderer spriteRenderer;
@@ -130,19 +170,31 @@ namespace MyProject
         private bool isTouchingLeftWall;
         private bool isTouchingRightWall;
         private bool isClimbing;
+        private bool isWallSliding;
 
         private float facingDirectionX = 1f; // Default facing right (1.0f)
 
         private ContactFilter2D contactFilter;
         private readonly RaycastHit2D[] castResults = new RaycastHit2D[5];
         private float horizontalInput;
-        private bool isMouseHeld;
+        private bool isPointerHeld;
+        private Vector2 touchStartScreenPos;
+        private float touchStartTime;
+        private bool hasSwipedThisTouch;
+        private Vector2 currentPointerScreenPos;
+        private Camera mainCamera;
+        private bool isInvulnerable = false;
+        private Coroutine invulnerabilityCoroutine;
 
         private void Awake()
         {
+            Instance = this;
+            gameObject.tag = "Player";
+
             rb = GetComponent<Rigidbody2D>();
             circleCollider = GetComponent<CircleCollider2D>();
             spriteRenderer = GetComponentInChildren<SpriteRenderer>();
+            mainCamera = Camera.main;
 
             // Fallback in case walkingSprite is not assigned
             if (spriteRenderer != null && walkingSprite == null)
@@ -170,6 +222,14 @@ namespace MyProject
         private void Start()
         {
             ApplySelectedSkin();
+        }
+
+        private void OnDestroy()
+        {
+            if (Instance == this)
+            {
+                Instance = null;
+            }
         }
 
         public void ApplySelectedSkin()
@@ -276,83 +336,191 @@ namespace MyProject
             if (GameManager.Instance != null && GameManager.Instance.CurrentState != GameState.Playing)
             {
                 horizontalInput = 0f;
-                isMouseHeld = false;
+                isPointerHeld = false;
+                isClimbing = false;
+                isWallSliding = false;
                 return;
             }
 
-            // Horizontal movement input detection (Arrow keys)
-            horizontalInput = 0f;
-            if (Keyboard.current != null)
+            UpdateMagnet();
+
+            // Smooth procedural squash & stretch recovery
+            if (spriteRenderer != null && spriteRenderer.transform.localScale != baseVisualScale)
             {
-                if (Keyboard.current.leftArrowKey.isPressed)
+                spriteRenderer.transform.localScale = Vector3.Lerp(
+                    spriteRenderer.transform.localScale,
+                    baseVisualScale,
+                    Time.deltaTime * squashRecoverySpeed
+                );
+            }
+
+            // 1. Detect pointer / touch state
+            isPointerHeld = false;
+            bool pointerDownThisFrame = false;
+            bool pointerUpThisFrame = false;
+            Vector2 pointerScreenPos = Vector2.zero;
+
+            if (Touchscreen.current != null && Touchscreen.current.primaryTouch.press.isPressed)
+            {
+                isPointerHeld = true;
+                pointerScreenPos = Touchscreen.current.primaryTouch.position.ReadValue();
+                if (Touchscreen.current.primaryTouch.press.wasPressedThisFrame) pointerDownThisFrame = true;
+            }
+            else if (Touchscreen.current != null && Touchscreen.current.primaryTouch.press.wasReleasedThisFrame)
+            {
+                pointerUpThisFrame = true;
+                pointerScreenPos = Touchscreen.current.primaryTouch.position.ReadValue();
+            }
+            else if (Pointer.current != null && Pointer.current.press.isPressed)
+            {
+                isPointerHeld = true;
+                pointerScreenPos = Pointer.current.position.ReadValue();
+                if (Pointer.current.press.wasPressedThisFrame) pointerDownThisFrame = true;
+            }
+            else if (Pointer.current != null && Pointer.current.press.wasReleasedThisFrame)
+            {
+                pointerUpThisFrame = true;
+                pointerScreenPos = Pointer.current.position.ReadValue();
+            }
+            else if (Mouse.current != null && Mouse.current.leftButton.isPressed)
+            {
+                isPointerHeld = true;
+                pointerScreenPos = Mouse.current.position.ReadValue();
+                if (Mouse.current.leftButton.wasPressedThisFrame) pointerDownThisFrame = true;
+            }
+            else if (Mouse.current != null && Mouse.current.leftButton.wasReleasedThisFrame)
+            {
+                pointerUpThisFrame = true;
+                pointerScreenPos = Mouse.current.position.ReadValue();
+            }
+
+            currentPointerScreenPos = pointerScreenPos;
+
+            // Handle touch begin
+            if (pointerDownThisFrame)
+            {
+                if (!IsPointerOverUI())
                 {
-                    horizontalInput = -1f;
-                    facingDirectionX = -1f; // Update facing left
+                    touchStartScreenPos = pointerScreenPos;
+                    touchStartTime = Time.time;
+                    hasSwipedThisTouch = false;
                 }
-                else if (Keyboard.current.rightArrowKey.isPressed)
+                else
                 {
-                    horizontalInput = 1f;
-                    facingDirectionX = 1f; // Update facing right
+                    isPointerHeld = false;
                 }
             }
 
-            // Tilt/Gyro horizontal movement detection
-            if (useTiltControl && Mathf.Approximately(horizontalInput, 0f))
+            // 2. Keyboard horizontal input detection (Arrow keys / A & D)
+            horizontalInput = 0f;
+            bool keyboardActive = false;
+            if (Keyboard.current != null)
             {
+                if (Keyboard.current.leftArrowKey.isPressed || Keyboard.current.aKey.isPressed)
+                {
+                    horizontalInput = -1f;
+                    facingDirectionX = -1f;
+                    keyboardActive = true;
+                }
+                else if (Keyboard.current.rightArrowKey.isPressed || Keyboard.current.dKey.isPressed)
+                {
+                    horizontalInput = 1f;
+                    facingDirectionX = 1f;
+                    keyboardActive = true;
+                }
+            }
+
+            // 3. Touch-and-Drag horizontal steering (when not actively using keyboard)
+            if (!keyboardActive && isPointerHeld && !IsPointerOverUI())
+            {
+                if (mainCamera == null) mainCamera = Camera.main;
+                if (mainCamera != null)
+                {
+                    Vector3 worldPos = mainCamera.ScreenToWorldPoint(new Vector3(pointerScreenPos.x, pointerScreenPos.y, -mainCamera.transform.position.z));
+                    float deltaX = worldPos.x - transform.position.x;
+                    if (Mathf.Abs(deltaX) > 0.12f)
+                    {
+                        horizontalInput = Mathf.Clamp(deltaX * dragResponsiveness, -1f, 1f);
+                        facingDirectionX = Mathf.Sign(deltaX);
+                    }
+                }
+            }
+            else if (!keyboardActive && !isPointerHeld && useTiltControl && Mathf.Approximately(horizontalInput, 0f))
+            {
+                // Tilt/Gyro horizontal movement detection fallback
                 float tiltInput = GetTiltHorizontalInput();
                 if (Mathf.Abs(tiltInput) > tiltDeadZone)
                 {
-                    // Scale and clamp tilt input
                     float processedTilt = tiltInput * tiltSensitivity;
                     horizontalInput = Mathf.Clamp(processedTilt, -1f, 1f);
-
-                    // Update facing direction based on movement direction
-                    if (horizontalInput < 0f)
-                    {
-                        facingDirectionX = -1f;
-                    }
-                    else if (horizontalInput > 0f)
-                    {
-                        facingDirectionX = 1f;
-                    }
+                    if (horizontalInput < 0f) facingDirectionX = -1f;
+                    else if (horizontalInput > 0f) facingDirectionX = 1f;
                 }
             }
 
-            // Detect touch/mouse/keyboard jump triggers
-            isMouseHeld = false;
-            bool jumpRequestedThisFrame = false;
-
-            if (Pointer.current != null)
+            // 4. Wall Climb input detection
+            bool climbInput = false;
+            if (isTouchingWall)
             {
-                if (Pointer.current.press.isPressed) isMouseHeld = true;
-                if (Pointer.current.press.wasPressedThisFrame) jumpRequestedThisFrame = true;
-            }
-
-            if (!jumpRequestedThisFrame && Mouse.current != null)
-            {
-                if (Mouse.current.leftButton.isPressed) isMouseHeld = true;
-                if (Mouse.current.leftButton.wasPressedThisFrame) jumpRequestedThisFrame = true;
-            }
-
-            if (!jumpRequestedThisFrame && Touchscreen.current != null)
-            {
-                if (Touchscreen.current.primaryTouch.press.isPressed) isMouseHeld = true;
-                if (Touchscreen.current.primaryTouch.press.wasPressedThisFrame) jumpRequestedThisFrame = true;
-            }
-
-            if (!jumpRequestedThisFrame && Keyboard.current != null)
-            {
-                if (Keyboard.current.spaceKey.wasPressedThisFrame ||
-                    Keyboard.current.upArrowKey.wasPressedThisFrame ||
-                    Keyboard.current.wKey.wasPressedThisFrame)
+                if (Keyboard.current != null && (Keyboard.current.upArrowKey.isPressed || Keyboard.current.wKey.isPressed))
                 {
-                    jumpRequestedThisFrame = true;
+                    climbInput = true;
+                }
+                else if (isPointerHeld && !IsPointerOverUI())
+                {
+                    // Holding touch against wall commands upward climb
+                    climbInput = true;
+                }
+            }
+            isClimbing = isTouchingWall && climbInput;
+
+            // 5. Swipe gesture detection
+            if (isPointerHeld && !hasSwipedThisTouch && !IsPointerOverUI())
+            {
+                Vector2 dragDelta = pointerScreenPos - touchStartScreenPos;
+                float dragDuration = Time.time - touchStartTime;
+
+                if (dragDelta.magnitude >= minSwipeDistance && dragDuration <= maxSwipeDuration)
+                {
+                    hasSwipedThisTouch = true;
+                    ProcessSwipe(dragDelta);
                 }
             }
 
-            if (jumpRequestedThisFrame && !IsPointerOverUI())
+            // 6. Tap release detection (touch ended quickly without dragging a full swipe)
+            if (pointerUpThisFrame && !hasSwipedThisTouch && !IsPointerOverUI())
             {
-                if (isGrounded || isTouchingWall || isClimbing || allowInfiniteJumps)
+                float touchDuration = Time.time - touchStartTime;
+                float touchDistance = (pointerScreenPos - touchStartScreenPos).magnitude;
+
+                if (touchDuration <= maxSwipeDuration && touchDistance < minSwipeDistance)
+                {
+                    if (isTouchingWall)
+                    {
+                        // Tap while touching wall executes a Wall Kick away from the wall
+                        float wallKickDir = isTouchingLeftWall ? 1f : -1f;
+                        ExecuteWallKick(wallKickDir);
+                    }
+                    else if (isGrounded || allowInfiniteJumps)
+                    {
+                        Jump();
+                    }
+                    else
+                    {
+                        MeleeAttack();
+                    }
+                }
+            }
+
+            // 7. Keyboard Space / Jump triggers
+            if (Keyboard.current != null && Keyboard.current.spaceKey.wasPressedThisFrame)
+            {
+                if (isTouchingWall)
+                {
+                    float wallKickDir = isTouchingLeftWall ? 1f : -1f;
+                    ExecuteWallKick(wallKickDir);
+                }
+                else if (isGrounded || allowInfiniteJumps)
                 {
                     Jump();
                 }
@@ -363,21 +531,187 @@ namespace MyProject
             }
         }
 
+        private void ProcessSwipe(Vector2 swipeDelta)
+        {
+            if (isTouchingWall)
+            {
+                // Left wall kicks right (+1), Right wall kicks left (-1)
+                float wallKickDir = isTouchingLeftWall ? 1f : -1f;
+
+                // If swipe is directed away from wall OR upwards
+                if (Mathf.Sign(swipeDelta.x) == Mathf.Sign(wallKickDir) || swipeDelta.y > 0f)
+                {
+                    ExecuteWallKick(wallKickDir);
+                    return;
+                }
+            }
+
+            if (isGrounded || allowInfiniteJumps)
+            {
+                if (swipeDelta.y > 0f)
+                {
+                    Jump();
+                    return;
+                }
+            }
+
+            // Mid-air swipe triggers melee attack
+            if (!isGrounded && !isTouchingWall)
+            {
+                MeleeAttack();
+            }
+        }
+
+        public void ExecuteWallKick(float kickDirX)
+        {
+            isClimbing = false;
+            isWallSliding = false;
+            facingDirectionX = kickDirX;
+
+            if (landingTransitionCoroutine != null)
+            {
+                StopCoroutine(landingTransitionCoroutine);
+                landingTransitionCoroutine = null;
+            }
+            if (jumpTransitionCoroutine != null)
+            {
+                StopCoroutine(jumpTransitionCoroutine);
+                jumpTransitionCoroutine = null;
+            }
+            if (attackCoroutine != null)
+            {
+                StopCoroutine(attackCoroutine);
+                attackCoroutine = null;
+            }
+
+            // Apply diagonal wall kick impulse
+            rb.linearVelocity = new Vector2(kickDirX * wallKickForceX, wallKickForceY);
+
+            // Wall-kick lateral stretch and dust puff
+            ApplySquashAndStretch(1.22f, 0.8f);
+            FXManager.Instance?.EmitJumpDust(transform.position + new Vector3(-kickDirX * 0.25f, -0.1f, 0f), new Vector2(kickDirX, 0.4f));
+            AudioManager.Instance?.PlayWallKick();
+
+            // Snappy visual response
+            currentVisualState = (kickDirX < 0f) ? CatState.JumpingLeft : CatState.JumpingRight;
+            ApplySpriteState(currentVisualState);
+        }
+
+        public void SuperBounce(float bounceForce)
+        {
+            isClimbing = false;
+            isWallSliding = false;
+            isGrounded = false;
+
+            if (landingTransitionCoroutine != null)
+            {
+                StopCoroutine(landingTransitionCoroutine);
+                landingTransitionCoroutine = null;
+            }
+            if (jumpTransitionCoroutine != null)
+            {
+                StopCoroutine(jumpTransitionCoroutine);
+                jumpTransitionCoroutine = null;
+            }
+            if (attackCoroutine != null)
+            {
+                StopCoroutine(attackCoroutine);
+                attackCoroutine = null;
+            }
+
+            // High launch velocity upward
+            rb.linearVelocity = new Vector2(rb.linearVelocity.x, bounceForce);
+
+            // Responsive aerial pose
+            currentVisualState = (Mathf.Abs(rb.linearVelocity.x) > 0.4f) ? 
+                (rb.linearVelocity.x < 0f ? CatState.JumpingLeft : CatState.JumpingRight) : 
+                CatState.VerticalJump;
+            ApplySpriteState(currentVisualState);
+        }
+
+        [Header("Power-up State")]
+        [Tooltip("Suction radius in units for the coin magnet power-up.")]
+        [SerializeField] private float magnetRadius = 7.5f;
+
+        [Tooltip("Base speed at which attracted coins fly toward the cat.")]
+        [SerializeField] private float magnetPullSpeed = 18f;
+
+        private float magnetRemainingTime = 0f;
+        public bool IsMagnetActive => magnetRemainingTime > 0f;
+        public float MagnetRemainingTime => magnetRemainingTime;
+        public float MagnetRadius => magnetRadius;
+        public float MagnetPullSpeed => magnetPullSpeed;
+
+        public void ActivateMagnet(float duration)
+        {
+            magnetRemainingTime = Mathf.Max(magnetRemainingTime, duration);
+            Debug.Log($"[PlayerController] Magnet power-up activated for {duration} seconds!");
+        }
+
+        private void UpdateMagnet()
+        {
+            if (magnetRemainingTime > 0f)
+            {
+                magnetRemainingTime -= Time.deltaTime;
+                AttractNearbyFish();
+            }
+        }
+
+        private void AttractNearbyFish()
+        {
+            if (PlatformManager.Instance == null) return;
+            var pool = PlatformManager.Instance.PlatformPool;
+            if (pool == null) return;
+
+            Vector3 playerPos = transform.position;
+            float magnetRadiusSq = magnetRadius * magnetRadius;
+
+            for (int i = 0; i < pool.Count; i++)
+            {
+                GameObject platform = pool[i];
+                if (platform == null || !platform.activeInHierarchy) continue;
+
+                Transform treatTransform = platform.transform.Find("FishTreat");
+                if (treatTransform != null && treatTransform.gameObject.activeSelf)
+                {
+                    Vector3 treatPos = treatTransform.position;
+                    float distSq = (playerPos - treatPos).sqrMagnitude;
+                    if (distSq <= magnetRadiusSq)
+                    {
+                        FishTreat treat = treatTransform.GetComponent<FishTreat>();
+                        if (treat != null)
+                        {
+                            treat.StartAttraction();
+                        }
+                    }
+                }
+            }
+        }
+
         private void FixedUpdate()
         {
             // 1. Ground detection
+            bool wasGroundedBefore = isGrounded;
             if (!allowInfiniteJumps)
             {
-                float castDistance = 0.05f;
-                int hitCount = circleCollider.Cast(Vector2.down, contactFilter, castResults, castDistance);
-
-                isGrounded = false;
-                for (int i = 0; i < hitCount; i++)
+                // When leaping rapidly upwards through one-way platforms, player cannot be grounded
+                if (rb.linearVelocity.y > 0.15f)
                 {
-                    if (castResults[i].collider != null && castResults[i].collider.gameObject != gameObject)
+                    isGrounded = false;
+                }
+                else
+                {
+                    float castDistance = 0.05f;
+                    int hitCount = circleCollider.Cast(Vector2.down, contactFilter, castResults, castDistance);
+
+                    isGrounded = false;
+                    for (int i = 0; i < hitCount; i++)
                     {
-                        isGrounded = true;
-                        break;
+                        if (castResults[i].collider != null && castResults[i].collider.gameObject != gameObject)
+                        {
+                            isGrounded = true;
+                            break;
+                        }
                     }
                 }
             }
@@ -386,8 +720,14 @@ namespace MyProject
                 isGrounded = true;
             }
 
+            if (!wasGroundedBefore && isGrounded)
+            {
+                OnLanded();
+            }
+            lastVerticalVelocity = rb.linearVelocity.y;
+
             // 2. Wall detection (left and right cast)
-            float wallCastDistance = 0.05f;
+            float wallCastDistance = 0.06f;
             isTouchingLeftWall = false;
             isTouchingRightWall = false;
 
@@ -415,14 +755,20 @@ namespace MyProject
 
             isTouchingWall = isTouchingLeftWall || isTouchingRightWall;
 
-            // 3. Apply vertical movement (climbing vs gravity)
+            // 3. Apply vertical movement (climbing vs wall slide vs gravity)
             float targetVerticalVelocity = rb.linearVelocity.y;
-            isClimbing = isTouchingWall && isMouseHeld;
+            isWallSliding = false;
 
             if (isClimbing)
             {
                 // Override gravity with upward climbing speed
                 targetVerticalVelocity = climbSpeed;
+            }
+            else if (isTouchingWall && !isGrounded && rb.linearVelocity.y < 0f)
+            {
+                // Wall slide: clamp downward fall speed
+                isWallSliding = true;
+                targetVerticalVelocity = Mathf.Max(rb.linearVelocity.y, wallSlideSpeed);
             }
 
             // 4. Apply final velocities
@@ -433,9 +779,13 @@ namespace MyProject
         {
             if (isGrounded || isTouchingWall || isClimbing || allowInfiniteJumps)
             {
-                // If we are in the air (meaning allowInfiniteJumps is true and we are not physically grounded),
-                // or if we are climbing, do an instant jump without crouch delay.
-                // Otherwise, do a smooth transition jump.
+                if (isTouchingWall)
+                {
+                    float wallKickDir = isTouchingLeftWall ? 1f : -1f;
+                    ExecuteWallKick(wallKickDir);
+                    return;
+                }
+
                 bool physicallyGrounded = false;
                 if (!allowInfiniteJumps)
                 {
@@ -477,7 +827,50 @@ namespace MyProject
                 else
                 {
                     rb.linearVelocity = new Vector2(rb.linearVelocity.x, jumpForce);
+                    ApplySquashAndStretch(0.82f, 1.22f);
+                    FXManager.Instance?.EmitJumpDust(transform.position + Vector3.down * 0.25f, Vector2.down);
+                    AudioManager.Instance?.PlayJump();
                 }
+            }
+        }
+
+        private void OnLanded()
+        {
+            float impactSpeed = Mathf.Abs(lastVerticalVelocity);
+            float squashX = Mathf.Clamp(1.0f + impactSpeed * 0.035f, 1.15f, 1.35f);
+            float squashY = Mathf.Clamp(1.0f - impactSpeed * 0.035f, 0.65f, 0.85f);
+            ApplySquashAndStretch(squashX, squashY);
+
+            FXManager.Instance?.EmitJumpDust(transform.position + Vector3.down * 0.25f, Vector2.up);
+
+            comboCount++;
+            if (comboCount == 3)
+            {
+                UIManager.Instance?.ShowToast("3x COMBO!", new Color(0.4f, 0.95f, 0.5f, 1f));
+                AudioManager.Instance?.PlayStreak();
+            }
+            else if (comboCount == 5)
+            {
+                UIManager.Instance?.ShowToast("5x STREAK!", new Color(0.3f, 0.85f, 1f, 1f));
+                AudioManager.Instance?.PlayStreak();
+            }
+            else if (comboCount == 8)
+            {
+                UIManager.Instance?.ShowToast("ON FIRE!", new Color(1f, 0.5f, 0.2f, 1f));
+                AudioManager.Instance?.PlayStreak();
+            }
+            else if (comboCount == 12)
+            {
+                UIManager.Instance?.ShowToast("UNSTOPPABLE!", new Color(1f, 0.3f, 0.85f, 1f));
+                AudioManager.Instance?.PlayStreak();
+            }
+        }
+
+        private void ApplySquashAndStretch(float multX, float multY)
+        {
+            if (spriteRenderer != null)
+            {
+                spriteRenderer.transform.localScale = new Vector3(baseVisualScale.x * multX, baseVisualScale.y * multY, 1f);
             }
         }
 
@@ -515,26 +908,93 @@ namespace MyProject
 
         private void OnCollisionEnter2D(Collision2D collision)
         {
-            // Trigger Game Over if we collide with a solid hazard on the "Enemy" layer (e.g. wall spikes)
+            if (isInvulnerable) return;
+
+            // Trigger Defeat if we collide with a solid hazard on the "Enemy" layer (e.g. wall spikes)
             if (collision.gameObject.layer == LayerMask.NameToLayer("Enemy"))
             {
+                CameraFollowTarget.Instance?.AddTrauma(0.6f);
+                comboCount = 0;
+                AudioManager.Instance?.PlayHit();
                 if (GameManager.Instance != null)
                 {
-                    GameManager.Instance.TriggerGameOver();
+                    GameManager.Instance.HandlePlayerDefeat();
                 }
             }
         }
 
         private void OnTriggerEnter2D(Collider2D other)
         {
-            // Trigger Game Over if we overlap with a trigger hazard on the "Enemy" layer (e.g. platform enemy triangles)
+            if (isInvulnerable) return;
+
+            // Trigger Defeat if we overlap with a trigger hazard on the "Enemy" layer (e.g. platform enemy triangles)
             if (other.gameObject.layer == LayerMask.NameToLayer("Enemy"))
             {
+                CameraFollowTarget.Instance?.AddTrauma(0.6f);
+                comboCount = 0;
+                AudioManager.Instance?.PlayHit();
                 if (GameManager.Instance != null)
                 {
-                    GameManager.Instance.TriggerGameOver();
+                    GameManager.Instance.HandlePlayerDefeat();
                 }
             }
+        }
+
+        public void RespawnAt(Vector3 respawnPos)
+        {
+            comboCount = 0;
+            transform.position = respawnPos;
+            if (rb == null) rb = GetComponent<Rigidbody2D>();
+            if (rb != null)
+            {
+                rb.bodyType = RigidbodyType2D.Dynamic;
+                rb.linearVelocity = new Vector2(0f, 4.5f); // Gentle upward hop on revive
+            }
+            enabled = true;
+            isClimbing = false;
+            isWallSliding = false;
+            TriggerInvulnerability(2.5f);
+        }
+
+        public void TriggerInvulnerability(float duration = 2.5f)
+        {
+            if (gameObject.activeInHierarchy)
+            {
+                if (invulnerabilityCoroutine != null)
+                {
+                    StopCoroutine(invulnerabilityCoroutine);
+                }
+                invulnerabilityCoroutine = StartCoroutine(InvulnerabilityRoutine(duration));
+            }
+        }
+
+        private System.Collections.IEnumerator InvulnerabilityRoutine(float duration)
+        {
+            isInvulnerable = true;
+            float elapsed = 0f;
+            Color baseColor = (spriteRenderer != null) ? spriteRenderer.color : Color.white;
+
+            while (elapsed < duration)
+            {
+                if (spriteRenderer != null)
+                {
+                    spriteRenderer.color = new Color(baseColor.r, baseColor.g, baseColor.b, 0.35f);
+                }
+                yield return new WaitForSeconds(0.12f);
+                if (spriteRenderer != null)
+                {
+                    spriteRenderer.color = baseColor;
+                }
+                yield return new WaitForSeconds(0.12f);
+                elapsed += 0.24f;
+            }
+
+            if (spriteRenderer != null)
+            {
+                spriteRenderer.color = baseColor;
+            }
+            isInvulnerable = false;
+            invulnerabilityCoroutine = null;
         }
 
         private void LateUpdate()
@@ -542,7 +1002,7 @@ namespace MyProject
             if (spriteRenderer != null)
             {
                 // 1. Detect landing transition trigger
-                if (!wasGrounded && isGrounded && !isClimbing && jumpTransitionCoroutine == null)
+                if (!wasGrounded && isGrounded && !isClimbing && !isWallSliding && jumpTransitionCoroutine == null)
                 {
                     if (landingTransitionCoroutine != null)
                     {
@@ -562,8 +1022,8 @@ namespace MyProject
                     landingTransitionCoroutine = StartCoroutine(AnimateLandingTransition(landedVertically));
                 }
 
-                // 2. If climbing, cancel landing/jump/attack transitions immediately
-                if (isClimbing)
+                // 2. If climbing or wall sliding, cancel landing/jump/attack transitions immediately
+                if (isClimbing || isWallSliding)
                 {
                     if (landingTransitionCoroutine != null)
                     {
@@ -608,15 +1068,15 @@ namespace MyProject
                 // Determine target visual state
                 CatState targetState = CatState.Idle;
 
-                if (isClimbing)
+                if (isClimbing || isWallSliding)
                 {
                     if (isTouchingLeftWall) targetState = CatState.ClimbingLeft;
                     else if (isTouchingRightWall) targetState = CatState.ClimbingRight;
                 }
                 else if (!isGrounded)
                 {
-                    if (horizontalInput < 0f) targetState = CatState.JumpingLeft;
-                    else if (horizontalInput > 0f) targetState = CatState.JumpingRight;
+                    if (horizontalInput < -0.1f) targetState = CatState.JumpingLeft;
+                    else if (horizontalInput > 0.1f) targetState = CatState.JumpingRight;
                     else targetState = CatState.VerticalJump;
                 }
                 else
@@ -634,10 +1094,11 @@ namespace MyProject
                 // Update looping animation frame index over time
                 if (IsLoopingState(currentVisualState))
                 {
+                    float currentFrameDuration = isWallSliding ? (frameDuration * 2.5f) : frameDuration;
                     animationTimer += Time.deltaTime;
-                    if (animationTimer >= frameDuration)
+                    if (animationTimer >= currentFrameDuration)
                     {
-                        animationTimer -= frameDuration;
+                        animationTimer -= currentFrameDuration;
                         
                         // For walking states, loop through 4 steps (Frame 1 -> 2 -> 3 -> 2)
                         if (currentVisualState == CatState.GoingLeft || currentVisualState == CatState.GoingRight)
@@ -764,6 +1225,9 @@ namespace MyProject
 
             // Apply physical jump velocity now that the crouch is complete!
             rb.linearVelocity = new Vector2(rb.linearVelocity.x, jumpForce);
+            ApplySquashAndStretch(0.8f, 1.25f);
+            FXManager.Instance?.EmitJumpDust(transform.position + Vector3.down * 0.28f, Vector2.down);
+            AudioManager.Instance?.PlayJump();
 
             // Frame 3: Takeoff
             if (isVertical)

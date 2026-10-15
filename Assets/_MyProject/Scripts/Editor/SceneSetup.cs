@@ -14,43 +14,78 @@ namespace MyProject.Editor
         [InitializeOnLoadMethod]
         private static void OnEditorLoaded()
         {
-            EditorApplication.delayCall += AutoGenerateScenesIfNeeded;
+            EditorApplication.update += CheckAndAutoGenerate;
         }
 
-        private static void AutoGenerateScenesIfNeeded()
+        private static void CheckAndAutoGenerate()
         {
             if (EditorApplication.isPlayingOrWillChangePlaymode || EditorApplication.isCompiling || EditorApplication.isUpdating)
             {
                 return;
             }
 
+            EditorApplication.update -= CheckAndAutoGenerate;
+            AutoGenerateScenesIfNeeded();
+        }
+
+        private static void AutoGenerateScenesIfNeeded()
+        {
+
             string prototypePath = "Assets/_MyProject/Scenes/PrototypeScene.unity";
             string gameplayPath = "Assets/_MyProject/Scenes/GameplayScene.unity";
+            string flagPath = "Assets/_MyProject/rebuild_scene.flag";
 
             bool needProto = !File.Exists(prototypePath);
             bool needGameplay = !File.Exists(gameplayPath);
+            bool needForceRebuild = File.Exists(flagPath);
 
-            if (needProto || needGameplay)
+            if (needProto || needGameplay || needForceRebuild)
             {
+                if (needForceRebuild)
+                {
+                    try { File.Delete(flagPath); } catch { }
+                }
+
                 string originalScenePath = EditorSceneManager.GetActiveScene().path;
 
-                if (needProto)
+                if (needProto || needForceRebuild)
                 {
-                    Debug.Log("PrototypeScene.unity not found. Auto-generating...");
+                    Debug.Log("PrototypeScene rebuild triggered...");
                     CreateScene("PrototypeScene", false);
                 }
 
-                if (needGameplay)
+                if (needGameplay || needForceRebuild)
                 {
-                    Debug.Log("GameplayScene.unity not found. Auto-generating...");
+                    Debug.Log("GameplayScene rebuild triggered...");
                     CreateScene("GameplayScene", true);
                 }
 
-                if (!string.IsNullOrEmpty(originalScenePath) && File.Exists(originalScenePath))
+                SyncSolutionReflection();
+
+                string targetToOpen = !string.IsNullOrEmpty(originalScenePath) && File.Exists(originalScenePath) ? originalScenePath : gameplayPath;
+                if (File.Exists(targetToOpen))
                 {
-                    EditorSceneManager.OpenScene(originalScenePath);
+                    EditorSceneManager.OpenScene(targetToOpen);
                 }
             }
+        }
+
+        public static void SyncSolutionReflection()
+        {
+            try
+            {
+                var codeEditorType = System.Type.GetType("Unity.CodeEditor.CodeEditor,Unity.CodeEditor");
+                if (codeEditorType != null)
+                {
+                    var editorProp = codeEditorType.GetProperty("Editor", BindingFlags.Static | BindingFlags.Public);
+                    var editor = editorProp?.GetValue(null);
+                    var currentProp = editor?.GetType().GetProperty("Current", BindingFlags.Instance | BindingFlags.Public);
+                    var current = currentProp?.GetValue(editor);
+                    var syncAllMethod = current?.GetType().GetMethod("SyncAll", BindingFlags.Instance | BindingFlags.Public);
+                    syncAllMethod?.Invoke(current, null);
+                }
+            }
+            catch { }
         }
 
         [MenuItem("Tools/MyProject/Create Prototype Scene")]
@@ -314,6 +349,10 @@ namespace MyProject.Editor
             string pauseJpgPath = Path.Combine(spritesDir, "PauseIcon.jpg");
             if (File.Exists(pauseIconPath)) SetAsSprite(pauseIconPath);
             if (File.Exists(pauseJpgPath)) SetAsSprite(pauseJpgPath);
+            string fishTreatPngPath = Path.Combine(spritesDir, "FishTreat.png");
+            if (File.Exists(fishTreatPngPath)) SetAsSprite(fishTreatPngPath);
+            string magnetItemPngPath = Path.Combine(spritesDir, "MagnetItem.png");
+            if (File.Exists(magnetItemPngPath)) SetAsSprite(magnetItemPngPath);
 
             AssetDatabase.Refresh();
 
@@ -627,15 +666,41 @@ namespace MyProject.Editor
             {
                 platformManager.wallSquareSprite = AssetDatabase.LoadAssetAtPath<Sprite>(squarePath);
             }
+            if (File.Exists(fishTreatPngPath))
+            {
+                platformManager.fishTreatSprite = AssetDatabase.LoadAssetAtPath<Sprite>(fishTreatPngPath);
+            }
+            if (File.Exists(magnetItemPngPath))
+            {
+                platformManager.magnetItemSprite = AssetDatabase.LoadAssetAtPath<Sprite>(magnetItemPngPath);
+            }
 
             // Create Wall Manager
             GameObject wallManagerGo = new GameObject("WallManager");
             WallManager wallManager = wallManagerGo.AddComponent<WallManager>();
             wallManager.spikeSprite = wallSpikeSprite;
 
-            // Create Game Manager
+            // Create Game Manager & FX Manager
             GameObject gameManagerGo = new GameObject("GameManager");
             gameManagerGo.AddComponent<GameManager>();
+
+            GameObject fxManagerGo = new GameObject("FXManager");
+            fxManagerGo.AddComponent<FXManager>();
+
+            // Create Audio Manager & Biome Manager
+            GameObject audioManagerGo = new GameObject("AudioManager");
+            AudioManager audioManager = audioManagerGo.AddComponent<AudioManager>();
+            audioManager.jumpClip = AssetDatabase.LoadAssetAtPath<AudioClip>("Assets/_MyProject/Audio/sfx_jump.wav");
+            audioManager.wallKickClip = AssetDatabase.LoadAssetAtPath<AudioClip>("Assets/_MyProject/Audio/sfx_wallkick.wav");
+            audioManager.coinClip = AssetDatabase.LoadAssetAtPath<AudioClip>("Assets/_MyProject/Audio/sfx_coin.wav");
+            audioManager.magnetClip = AssetDatabase.LoadAssetAtPath<AudioClip>("Assets/_MyProject/Audio/sfx_magnet.wav");
+            audioManager.crumbleClip = AssetDatabase.LoadAssetAtPath<AudioClip>("Assets/_MyProject/Audio/sfx_crumble.wav");
+            audioManager.hitClip = AssetDatabase.LoadAssetAtPath<AudioClip>("Assets/_MyProject/Audio/sfx_hit.wav");
+            audioManager.streakClip = AssetDatabase.LoadAssetAtPath<AudioClip>("Assets/_MyProject/Audio/sfx_streak.wav");
+            audioManager.clickClip = AssetDatabase.LoadAssetAtPath<AudioClip>("Assets/_MyProject/Audio/sfx_click.wav");
+
+            GameObject biomeManagerGo = new GameObject("BiomeManager");
+            biomeManagerGo.AddComponent<BiomeManager>();
 
             // 5. Cinemachine Setup via Reflection (avoids compilation reference issues)
             System.Type brainType = System.Type.GetType("Unity.Cinemachine.CinemachineBrain,Unity.Cinemachine") ?? System.Type.GetType("Cinemachine.CinemachineBrain,Cinemachine");
@@ -929,7 +994,7 @@ namespace MyProject.Editor
                     needsSave = true;
                 }
 
-                FilterMode targetFilter = (path.Contains("pixel_cat") || path.Contains("pixel_wall_tile") || path.Contains("GroundSprite") || path.Contains("GroundSquare") || path.Contains("GroundVertical") || path.Contains("GroundDirtOnly") || path.Contains("EnemyMouse")) ? FilterMode.Point : FilterMode.Bilinear;
+                FilterMode targetFilter = (path.Contains("pixel_cat") || path.Contains("pixel_wall_tile") || path.Contains("GroundSprite") || path.Contains("GroundSquare") || path.Contains("GroundVertical") || path.Contains("GroundDirtOnly") || path.Contains("EnemyMouse") || path.Contains("MagnetItem") || path.Contains("FishTreat")) ? FilterMode.Point : FilterMode.Bilinear;
                 if (importer.filterMode != targetFilter)
                 {
                     importer.filterMode = targetFilter;
@@ -1078,6 +1143,20 @@ namespace MyProject.Editor
             hudScoreRect.anchorMax = new Vector2(0.5f, 0.5f);
             hudScoreRect.sizeDelta = new Vector2(320, 80);
 
+            // Fish Coin Card Container
+            GameObject coinCard = CreateUIPanel(hudGo.transform, "CoinCard", new Color(0.08f, 0.09f, 0.12f, 0.65f));
+            RectTransform coinCardRect = coinCard.GetComponent<RectTransform>();
+            coinCardRect.anchorMin = new Vector2(0.05f, 0.865f);
+            coinCardRect.anchorMax = new Vector2(0.05f, 0.865f);
+            coinCardRect.pivot = new Vector2(0f, 1f);
+            coinCardRect.sizeDelta = new Vector2(240, 70);
+
+            GameObject hudCoinGo = CreateUIText(coinCard.transform, "CoinText", "FISH: 0", 24, FontStyle.Bold, new Color(1f, 0.84f, 0.3f, 1f), TextAnchor.MiddleCenter);
+            RectTransform hudCoinRect = hudCoinGo.GetComponent<RectTransform>();
+            hudCoinRect.anchorMin = new Vector2(0.5f, 0.5f);
+            hudCoinRect.anchorMax = new Vector2(0.5f, 0.5f);
+            hudCoinRect.sizeDelta = new Vector2(220, 60);
+
             // Pause Button Icon Sprite
             Sprite pauseIconSprite = null;
             string pauseJpg = Path.Combine(spritesDir, "PauseIcon.jpg");
@@ -1118,9 +1197,28 @@ namespace MyProject.Editor
             hudHsRect.pivot = new Vector2(1f, 1f);
             hudHsRect.sizeDelta = new Vector2(250, 75);
 
+            // Magnet Badge Container (Initially hidden)
+            GameObject magnetBadge = CreateUIPanel(hudGo.transform, "MagnetBadge", new Color(0.78f, 0.16f, 0.22f, 0.85f));
+            RectTransform magnetBadgeRect = magnetBadge.GetComponent<RectTransform>();
+            magnetBadgeRect.anchorMin = new Vector2(0.05f, 0.795f);
+            magnetBadgeRect.anchorMax = new Vector2(0.05f, 0.795f);
+            magnetBadgeRect.pivot = new Vector2(0f, 1f);
+            magnetBadgeRect.sizeDelta = new Vector2(240, 50);
+
+            GameObject magnetTextGo = CreateUIText(magnetBadge.transform, "MagnetText", "MAGNET: 8.0s", 20, FontStyle.Bold, new Color(1f, 0.95f, 0.6f, 1f), TextAnchor.MiddleCenter);
+            RectTransform magnetTextRect = magnetTextGo.GetComponent<RectTransform>();
+            magnetTextRect.anchorMin = new Vector2(0.5f, 0.5f);
+            magnetTextRect.anchorMax = new Vector2(0.5f, 0.5f);
+            magnetTextRect.sizeDelta = new Vector2(220, 44);
+
+            magnetBadge.SetActive(false);
+
             SetPrivateField(hudUI, "hudPanel", hudGo);
             SetPrivateField(hudUI, "scoreText", hudScoreGo.GetComponent<UnityEngine.UI.Text>());
             SetPrivateField(hudUI, "highScoreText", hudHsGo.GetComponent<UnityEngine.UI.Text>());
+            SetPrivateField(hudUI, "coinText", hudCoinGo.GetComponent<UnityEngine.UI.Text>());
+            SetPrivateField(hudUI, "magnetBadge", magnetBadge);
+            SetPrivateField(hudUI, "magnetBadgeText", magnetTextGo.GetComponent<UnityEngine.UI.Text>());
             SetPrivateField(hudUI, "pauseButton", pauseBtn);
 
             // 5. Create GameOverPanel
@@ -1437,10 +1535,63 @@ namespace MyProject.Editor
             SetPrivateField(pauseUI, "continueButton", continueBtn);
             SetPrivateField(pauseUI, "homeButton", homeBtn);
 
+            // 10. Create RevivePanel
+            GameObject reviveGo = CreateUIPanel(canvasGo.transform, "RevivePanel", new Color(0.05f, 0.06f, 0.09f, 0.88f));
+            MyProject.UI.ReviveUI reviveUI = reviveGo.AddComponent<MyProject.UI.ReviveUI>();
+
+            GameObject reviveCardGo = CreateUIPanel(reviveGo.transform, "ReviveCard", new Color(0.12f, 0.14f, 0.22f, 0.96f));
+            RectTransform reviveCardRect = reviveCardGo.GetComponent<RectTransform>();
+            reviveCardRect.anchorMin = new Vector2(0.5f, 0.5f);
+            reviveCardRect.anchorMax = new Vector2(0.5f, 0.5f);
+            reviveCardRect.pivot = new Vector2(0.5f, 0.5f);
+            reviveCardRect.sizeDelta = new Vector2(760, 680);
+
+            GameObject reviveTitleGo = CreateUIText(reviveCardGo.transform, "ReviveTitle", "SECOND CHANCE?", 52, FontStyle.Bold, new Color(1f, 0.85f, 0.3f, 1f), TextAnchor.MiddleCenter);
+            RectTransform reviveTitleRect = reviveTitleGo.GetComponent<RectTransform>();
+            reviveTitleRect.anchorMin = new Vector2(0.5f, 0.84f);
+            reviveTitleRect.anchorMax = new Vector2(0.5f, 0.84f);
+            reviveTitleRect.sizeDelta = new Vector2(700, 70);
+
+            GameObject countdownGo = CreateUIText(reviveCardGo.transform, "CountdownText", "5", 72, FontStyle.Bold, new Color(1f, 0.4f, 0.4f, 1f), TextAnchor.MiddleCenter);
+            RectTransform cdRect = countdownGo.GetComponent<RectTransform>();
+            cdRect.anchorMin = new Vector2(0.5f, 0.65f);
+            cdRect.anchorMax = new Vector2(0.5f, 0.65f);
+            cdRect.sizeDelta = new Vector2(200, 90);
+
+            GameObject coinReviveBtnGo = CreateUIButton(reviveCardGo.transform, "CoinReviveButton", "REVIVE (20 FISH)", 30, new Color(0.2f, 0.75f, 0.4f, 1f), Color.white);
+            RectTransform coinReviveBtnRect = coinReviveBtnGo.GetComponent<RectTransform>();
+            coinReviveBtnRect.anchorMin = new Vector2(0.5f, 0.46f);
+            coinReviveBtnRect.anchorMax = new Vector2(0.5f, 0.46f);
+            coinReviveBtnRect.sizeDelta = new Vector2(520, 85);
+            UnityEngine.UI.Button coinReviveBtn = coinReviveBtnGo.GetComponent<UnityEngine.UI.Button>();
+            UnityEngine.UI.Text coinReviveBtnTxt = coinReviveBtnGo.GetComponentInChildren<UnityEngine.UI.Text>();
+
+            GameObject adReviveBtnGo = CreateUIButton(reviveCardGo.transform, "AdReviveButton", "WATCH AD REVIVE", 28, new Color(0.25f, 0.6f, 0.9f, 1f), Color.white);
+            RectTransform adReviveBtnRect = adReviveBtnGo.GetComponent<RectTransform>();
+            adReviveBtnRect.anchorMin = new Vector2(0.5f, 0.30f);
+            adReviveBtnRect.anchorMax = new Vector2(0.5f, 0.30f);
+            adReviveBtnRect.sizeDelta = new Vector2(520, 80);
+            UnityEngine.UI.Button adReviveBtn = adReviveBtnGo.GetComponent<UnityEngine.UI.Button>();
+
+            GameObject skipBtnGo = CreateUIButton(reviveCardGo.transform, "SkipButton", "NO THANKS", 26, new Color(0.4f, 0.45f, 0.55f, 0.8f), Color.white);
+            RectTransform skipBtnRect = skipBtnGo.GetComponent<RectTransform>();
+            skipBtnRect.anchorMin = new Vector2(0.5f, 0.14f);
+            skipBtnRect.anchorMax = new Vector2(0.5f, 0.14f);
+            skipBtnRect.sizeDelta = new Vector2(400, 65);
+            UnityEngine.UI.Button skipBtn = skipBtnGo.GetComponent<UnityEngine.UI.Button>();
+
+            SetPrivateField(reviveUI, "revivePanel", reviveGo);
+            SetPrivateField(reviveUI, "countdownText", countdownGo.GetComponent<UnityEngine.UI.Text>());
+            SetPrivateField(reviveUI, "coinReviveButton", coinReviveBtn);
+            SetPrivateField(reviveUI, "coinReviveButtonText", coinReviveBtnTxt);
+            SetPrivateField(reviveUI, "adReviveButton", adReviveBtn);
+            SetPrivateField(reviveUI, "skipButton", skipBtn);
+
             // Link all to UIManager
-            uiManager.SetReferences(mainMenuUI, hudUI, gameOverUI, shopUI, missionUI, rankingUI, pauseUI);
+            uiManager.SetReferences(mainMenuUI, hudUI, gameOverUI, shopUI, missionUI, rankingUI, pauseUI, reviveUI);
 
             // Hide panels by default (UIManager handles visibility state)
+            reviveGo.SetActive(false);
             pauseGo.SetActive(false);
             rankingGo.SetActive(false);
             missionGo.SetActive(false);

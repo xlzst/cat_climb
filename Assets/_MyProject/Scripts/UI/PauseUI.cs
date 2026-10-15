@@ -41,6 +41,7 @@ namespace MyProject.UI
 
         private void OnContinueClicked()
         {
+            AudioManager.Instance?.PlayClick();
             Debug.Log("[PauseUI] Continue button clicked. Resuming game...");
             if (GameManager.Instance != null)
             {
@@ -50,6 +51,7 @@ namespace MyProject.UI
 
         private void OnHomeClicked()
         {
+            AudioManager.Instance?.PlayClick();
             Debug.Log("[PauseUI] Home button clicked. Returning to main menu...");
             if (GameManager.Instance != null)
             {

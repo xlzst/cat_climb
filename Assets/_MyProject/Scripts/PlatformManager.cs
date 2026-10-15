@@ -16,6 +16,24 @@ namespace MyProject
         [Tooltip("The target world scale for the enemy sprite (default is 0.5 to match the cat).")]
         [SerializeField] private float enemyScale = 0.5f;
 
+        [Header("Collectible Settings")]
+        [Tooltip("The fish treat sprite. Assigned programmatically by the scene builder.")]
+        public Sprite fishTreatSprite;
+        [Tooltip("Spawn chance for fish treat on empty platforms.")]
+        [SerializeField] private float fishTreatSpawnChance = 0.35f;
+        [Tooltip("The target world scale for the fish treat sprite.")]
+        [SerializeField] private float fishTreatScale = 0.45f;
+
+        [Header("Power-up Settings")]
+        [Tooltip("The magnet item sprite.")]
+        public Sprite magnetItemSprite;
+        [Tooltip("Spawn chance for magnet power-up.")]
+        [SerializeField] private float magnetSpawnChance = 0.08f;
+        [SerializeField] private float magnetItemScale = 0.5f;
+
+        [Tooltip("Spawn chance for fragile crumbling platforms.")]
+        [SerializeField] private float fragilePlatformChance = 0.20f;
+
         [Header("Spawn Settings")]
         [SerializeField] private float minVerticalSpacing = 1.2f;
         [SerializeField] private float maxVerticalSpacing = 1.9f;
@@ -30,6 +48,7 @@ namespace MyProject
         public int movingPlatformScoreThreshold = 100;
 
         private List<GameObject> platformPool = new List<GameObject>();
+        public IReadOnlyList<GameObject> PlatformPool => platformPool;
         private float highestPlatformY;
         private Transform cameraTransform;
 
@@ -123,6 +142,33 @@ namespace MyProject
                     wallSquareSprite = UnityEditor.AssetDatabase.LoadAssetAtPath<Sprite>("Assets/_MyProject/Sprites/WallSquare.png");
                 }
 #endif
+            }
+
+            if (fishTreatSprite == null)
+            {
+                fishTreatSprite = Resources.Load<Sprite>("FishTreat");
+#if UNITY_EDITOR
+                if (fishTreatSprite == null)
+                {
+                    fishTreatSprite = UnityEditor.AssetDatabase.LoadAssetAtPath<Sprite>("Assets/_MyProject/Sprites/FishTreat.png");
+                }
+#endif
+            }
+
+            if (magnetItemSprite == null)
+            {
+                magnetItemSprite = Resources.Load<Sprite>("MagnetItem");
+#if UNITY_EDITOR
+                if (magnetItemSprite == null)
+                {
+                    magnetItemSprite = UnityEditor.AssetDatabase.LoadAssetAtPath<Sprite>("Assets/_MyProject/Sprites/MagnetItem.png");
+                }
+#endif
+            }
+
+            if (WallManager.Instance != null)
+            {
+                WallManager.Instance.EnsureInitialized();
             }
 
             InitializePool();
@@ -230,6 +276,20 @@ namespace MyProject
             if (IsWallGapInvalid(candidatePlatformRect, 0.55f))
             {
                 return false;
+            }
+
+            // 2. Check Platform vs Active Wall Spikes
+            if (WallManager.Instance != null)
+            {
+                float halfHeight = candidatePlatformRect.height * 0.5f;
+                if (candidatePlatformRect.xMin < -2.0f && WallManager.Instance.IsSpikeNear(candidatePlatformRect.xMin, candidatePos.y, halfHeight + 0.45f))
+                {
+                    return false;
+                }
+                if (candidatePlatformRect.xMax > 2.0f && WallManager.Instance.IsSpikeNear(candidatePlatformRect.xMax, candidatePos.y, halfHeight + 0.45f))
+                {
+                    return false;
+                }
             }
 
             Rect candidateEnemyRect = hasEnemy ? GetEnemyWorldRect(candidatePos, platformScale, enemyLocalPos) : new Rect();
@@ -376,8 +436,50 @@ namespace MyProject
                 platformInstance.transform.position = chosenPos;
                 platformInstance.SetActive(true);
 
+                // Attach FragilePlatform component
+                FragilePlatform fragileComp = platformInstance.AddComponent<FragilePlatform>();
+
+                // Determine mutually exclusive item spawns
+                bool shouldSpawnMagnet = !shouldSpawnEnemy && (Random.value <= magnetSpawnChance);
+                bool shouldSpawnFishTreat = !shouldSpawnEnemy && !shouldSpawnMagnet && (Random.value <= fishTreatSpawnChance);
+
+                // Ensure items never spawn on or dangerously near active wall spikes
+                if (WallManager.Instance != null && (shouldSpawnMagnet || shouldSpawnFishTreat))
+                {
+                    float itemWorldY = chosenPos.y + 0.64f * platformScale.y + (fishTreatScale * 0.5f + 0.25f);
+                    if (WallManager.Instance.IsSpikeNear(chosenPos.x, itemWorldY, 1.35f))
+                    {
+                        shouldSpawnMagnet = false;
+                        shouldSpawnFishTreat = false;
+                    }
+                }
+
+                // Configure Fragile Platform (only on non-vertical platforms, when no enemy)
+                bool isFragile = (shapeChoice != 1) && !shouldSpawnEnemy && (Random.value <= fragilePlatformChance);
+                SpriteRenderer sr = platformInstance.GetComponent<SpriteRenderer>();
+                Color baseCol = (sr != null) ? sr.color : Color.white;
+                fragileComp.ConfigureFragile(isFragile, baseCol);
+
                 // Create and attach the pooled Enemy child GameObject
                 CreateEnemyChild(platformInstance, shouldSpawnEnemy, chosenEnemyLocalPos);
+
+                // Create and attach the pooled MagnetItem child GameObject
+                Vector3 chosenMagnetLocalPos = Vector3.zero;
+                if (shouldSpawnMagnet)
+                {
+                    float magnetLocalY = 0.64f + ((magnetItemScale / 2f + 0.3f) / platformScale.y);
+                    chosenMagnetLocalPos = new Vector3(0f, magnetLocalY, 0f);
+                }
+                CreateMagnetChild(platformInstance, shouldSpawnMagnet, chosenMagnetLocalPos);
+
+                // Create and attach the pooled FishTreat child GameObject
+                Vector3 chosenFishTreatLocalPos = Vector3.zero;
+                if (shouldSpawnFishTreat)
+                {
+                    float localY = 0.64f + ((fishTreatScale / 2f + 0.25f) / platformScale.y);
+                    chosenFishTreatLocalPos = new Vector3(0f, localY, 0f);
+                }
+                CreateFishTreatChild(platformInstance, shouldSpawnFishTreat, chosenFishTreatLocalPos);
 
                 highestPlatformY = Mathf.Max(highestPlatformY, chosenPos.y);
                 currentSpawnY = highestPlatformY + Random.Range(minVerticalSpacing, maxVerticalSpacing);
@@ -396,15 +498,16 @@ namespace MyProject
         {
             SpriteRenderer spriteRenderer = platform.GetComponent<SpriteRenderer>();
             BoxCollider2D collider = platform.GetComponent<BoxCollider2D>();
-            // Remove any PlatformEffector2D so platforms are standard solid blocks
+            // Platforms act as solid physical obstacles (player cannot pass through from below)
             PlatformEffector2D effector = platform.GetComponent<PlatformEffector2D>();
             if (effector != null)
             {
-                Destroy(effector);
+                effector.enabled = false;
             }
 
             if (collider != null)
             {
+                collider.enabled = true;
                 collider.usedByEffector = false;
             }
 
@@ -530,9 +633,91 @@ namespace MyProject
             enemyGo.SetActive(shouldSpawnEnemy);
         }
 
+        private void CreateFishTreatChild(GameObject platform, bool shouldSpawnTreat, Vector3 treatLocalPos)
+        {
+            GameObject treatGo = new GameObject("FishTreat");
+            treatGo.transform.SetParent(platform.transform);
+
+            Vector3 platformScale = platform.transform.localScale;
+            float px = platformScale.x;
+            float py = platformScale.y;
+
+            treatGo.transform.localPosition = treatLocalPos;
+            treatGo.transform.localScale = new Vector3(fishTreatScale / px, fishTreatScale / py, 1f);
+
+            SpriteRenderer treatRenderer = treatGo.AddComponent<SpriteRenderer>();
+            if (fishTreatSprite != null)
+            {
+                treatRenderer.sprite = fishTreatSprite;
+            }
+            treatRenderer.color = Color.white;
+            treatRenderer.sortingOrder = 6;
+
+            CircleCollider2D circleCol = treatGo.AddComponent<CircleCollider2D>();
+            circleCol.radius = 0.45f;
+            circleCol.isTrigger = true;
+
+            FishTreat fishTreat = treatGo.AddComponent<FishTreat>();
+            fishTreat.SetBasePosition(treatLocalPos);
+
+            treatGo.SetActive(shouldSpawnTreat);
+        }
+
+        private void CreateMagnetChild(GameObject platform, bool shouldSpawnMagnet, Vector3 magnetLocalPos)
+        {
+            GameObject magnetGo = new GameObject("MagnetItem");
+            magnetGo.transform.SetParent(platform.transform);
+
+            Vector3 platformScale = platform.transform.localScale;
+            float px = platformScale.x;
+            float py = platformScale.y;
+
+            magnetGo.transform.localPosition = magnetLocalPos;
+            magnetGo.transform.localScale = new Vector3(magnetItemScale / px, magnetItemScale / py, 1f);
+
+            SpriteRenderer magnetRenderer = magnetGo.AddComponent<SpriteRenderer>();
+            if (magnetItemSprite != null)
+            {
+                magnetRenderer.sprite = magnetItemSprite;
+            }
+            magnetRenderer.color = Color.white;
+            magnetRenderer.sortingOrder = 6;
+
+            CircleCollider2D circleCol = magnetGo.AddComponent<CircleCollider2D>();
+            circleCol.radius = 0.45f;
+            circleCol.isTrigger = true;
+
+            MagnetItem magnetComp = magnetGo.AddComponent<MagnetItem>();
+            magnetComp.SetBasePosition(magnetLocalPos);
+
+            magnetGo.SetActive(shouldSpawnMagnet);
+        }
+
+        public float GetHighestPlatformY(GameObject excludePlatform = null)
+        {
+            float maxY = float.MinValue;
+            for (int i = 0; i < platformPool.Count; i++)
+            {
+                GameObject p = platformPool[i];
+                if (p == null || p == excludePlatform || !p.activeInHierarchy) continue;
+                if (p.transform.position.y > maxY)
+                {
+                    maxY = p.transform.position.y;
+                }
+            }
+            return (maxY == float.MinValue) ? initialSpawnY : maxY;
+        }
+
         private void Update()
         {
-            if (cameraTransform == null) return;
+            if (cameraTransform == null)
+            {
+                if (Camera.main != null)
+                {
+                    cameraTransform = Camera.main.transform;
+                }
+                else return;
+            }
 
             // Calculate the recycle threshold based on camera height
             float recycleThresholdY = cameraTransform.position.y - recycleOffset;
@@ -541,7 +726,7 @@ namespace MyProject
             for (int i = 0; i < platformPool.Count; i++)
             {
                 GameObject platform = platformPool[i];
-                if (platform.transform.position.y < recycleThresholdY)
+                if (platform != null && platform.transform.position.y < recycleThresholdY)
                 {
                     RecyclePlatform(platform);
                 }
@@ -565,7 +750,18 @@ namespace MyProject
             Vector3 chosenEnemyLocalPos = Vector3.zero;
             bool found = false;
 
-            float targetY = highestPlatformY + Random.Range(minVerticalSpacing, maxVerticalSpacing);
+            // Dynamically anchor to the current highest active platform in the scene
+            float baseTopY = GetHighestPlatformY(platform);
+            if (cameraTransform != null)
+            {
+                float minTopThreshold = cameraTransform.position.y + 5.5f;
+                if (baseTopY < minTopThreshold)
+                {
+                    baseTopY = minTopThreshold;
+                }
+            }
+
+            float targetY = baseTopY + Random.Range(minVerticalSpacing, maxVerticalSpacing);
 
             for (int yStep = 0; yStep < 30 && !found; yStep++)
             {
@@ -624,7 +820,7 @@ namespace MyProject
             }
 
             platform.transform.position = chosenPos;
-            highestPlatformY = Mathf.Max(highestPlatformY, chosenPos.y);
+            highestPlatformY = Mathf.Max(baseTopY, chosenPos.y);
 
             // Re-anchor MovingPlatform initial Y position after recycling
             MovingPlatform movingComp = platform.GetComponent<MovingPlatform>();
@@ -650,6 +846,84 @@ namespace MyProject
 
                     // Set position flush on top surface
                     enemyTransform.localPosition = chosenEnemyLocalPos;
+                }
+            }
+
+            // Determine mutually exclusive item spawns
+            bool shouldSpawnMagnet = !shouldSpawnEnemy && (Random.value <= magnetSpawnChance);
+            bool shouldSpawnFishTreat = !shouldSpawnEnemy && !shouldSpawnMagnet && (Random.value <= fishTreatSpawnChance);
+
+            // Ensure items never spawn on or dangerously near active wall spikes
+            if (WallManager.Instance != null && (shouldSpawnMagnet || shouldSpawnFishTreat))
+            {
+                float itemWorldY = chosenPos.y + 0.64f * platformScale.y + (fishTreatScale * 0.5f + 0.25f);
+                if (WallManager.Instance.IsSpikeNear(chosenPos.x, itemWorldY, 1.35f))
+                {
+                    shouldSpawnMagnet = false;
+                    shouldSpawnFishTreat = false;
+                }
+            }
+
+            // Configure Fragile Platform (only on non-vertical platforms, when no enemy)
+            FragilePlatform fragileComp = platform.GetComponent<FragilePlatform>();
+            if (fragileComp != null)
+            {
+                fragileComp.ResetFragile();
+                bool isFragile = (shapeChoice != 1) && !shouldSpawnEnemy && (Random.value <= fragilePlatformChance);
+                SpriteRenderer sr = platform.GetComponent<SpriteRenderer>();
+                Color baseCol = (sr != null) ? sr.color : Color.white;
+                fragileComp.ConfigureFragile(isFragile, baseCol);
+            }
+
+            // Handle magnet power-up recycling
+            Transform magnetTransform = platform.transform.Find("MagnetItem");
+            if (magnetTransform != null)
+            {
+                magnetTransform.gameObject.SetActive(shouldSpawnMagnet);
+                if (shouldSpawnMagnet)
+                {
+                    float px = platformScale.x;
+                    float py = platformScale.y;
+
+                    float localY = 0.64f + ((magnetItemScale / 2f + 0.3f) / py);
+                    Vector3 chosenMagnetLocalPos = new Vector3(0f, localY, 0f);
+
+                    magnetTransform.localScale = new Vector3(magnetItemScale / px, magnetItemScale / py, 1f);
+                    MagnetItem magnet = magnetTransform.GetComponent<MagnetItem>();
+                    if (magnet != null)
+                    {
+                        magnet.SetBasePosition(chosenMagnetLocalPos);
+                    }
+                    else
+                    {
+                        magnetTransform.localPosition = chosenMagnetLocalPos;
+                    }
+                }
+            }
+
+            // Handle fish treat recycling
+            Transform treatTransform = platform.transform.Find("FishTreat");
+            if (treatTransform != null)
+            {
+                treatTransform.gameObject.SetActive(shouldSpawnFishTreat);
+                if (shouldSpawnFishTreat)
+                {
+                    float px = platformScale.x;
+                    float py = platformScale.y;
+
+                    float localY = 0.64f + ((fishTreatScale / 2f + 0.25f) / py);
+                    Vector3 chosenFishTreatLocalPos = new Vector3(0f, localY, 0f);
+
+                    treatTransform.localScale = new Vector3(fishTreatScale / px, fishTreatScale / py, 1f);
+                    FishTreat fishTreat = treatTransform.GetComponent<FishTreat>();
+                    if (fishTreat != null)
+                    {
+                        fishTreat.SetBasePosition(chosenFishTreatLocalPos);
+                    }
+                    else
+                    {
+                        treatTransform.localPosition = chosenFishTreatLocalPos;
+                    }
                 }
             }
         }

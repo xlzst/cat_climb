@@ -49,6 +49,7 @@ namespace MyProject.UI
 
         private void OnRestartClicked()
         {
+            AudioManager.Instance?.PlayClick();
             Debug.Log("[GameOverUI] Restart button clicked.");
             if (GameManager.Instance != null)
             {

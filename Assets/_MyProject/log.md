@@ -384,3 +384,191 @@
 - Updated [MovingPlatform.cs](file:///Users/minwookang/cat_climb/Assets/_MyProject/Scripts/MovingPlatform.cs):
   - Evaluates score threshold against `PlatformManager.Instance.movingPlatformScoreThreshold` (100 for testing, equivalent to Y >= 10f).
 
+
+## [2026-10-12] Implement Phase 1: Core Loop & Locomotion Overhaul (One-Way Platforms, Touch/Drag, Wall Climb & Wall-Kicks)
+- Updated [PlatformManager.cs](file:///Users/minwookang/cat_climb/Assets/_MyProject/Scripts/PlatformManager.cs):
+  - Converted platform pooling setup and runtime recycling to configure `PlatformEffector2D` (`useOneWay = true`, `surfaceArc = 160f`, `rotationalOffset = 0f`) on all platforms.
+  - Enabled `collider.usedByEffector = true` on `BoxCollider2D`, allowing the cat to jump upward cleanly through platforms from below and land securely on top (Doodle Jump mechanic).
+  - Eliminated runtime `Destroy(effector)` calls during object recycling, adhering to zero-allocation gameplay performance guidelines.
+- Updated [PlayerController.cs](file:///Users/minwookang/cat_climb/Assets/_MyProject/Scripts/PlayerController.cs):
+  - **Modern Hybrid-Casual Touch/Drag Steering**: Implemented direct horizontal tracking where the cat smoothly steers toward the user's touch/finger world position (`deltaX * dragResponsiveness`) with fallback to keyboard and tilt sensors.
+  - **Wall Climb & Wall Sliding Synergy**: When contacting a wall, holding touch or pressing Up/W activates smooth upward climbing at `climbSpeed` with animated climbing frames. Releasing touch while falling against a wall engages controlled `wallSlideSpeed` friction.
+  - **Swipe Wall-Kicks & Tap Kicks**: Implemented gesture detection (`ProcessSwipe` and tap release). Swiping away from a wall or upward launches an acrobatic diagonal impulse (`Vector2(-wallNormalX * wallKickForceX, wallKickForceY)`) for rapid zigzag climbing.
+  - **One-Way Ground Safety**: Added vertical velocity threshold check (`rb.linearVelocity.y > 0.15f`) to prevent premature grounding or crouch interruptions while leaping upward through one-way platforms.
+  - Updated visual state transitions and animation timers in `LateUpdate` to support wall sliding alongside wall climbing.
+
+## [2026-10-12] Revert to Solid Physical Platforms (No Pass-Through From Below)
+- Updated [PlatformManager.cs](file:///Users/minwookang/cat_climb/Assets/_MyProject/Scripts/PlatformManager.cs):
+  - Disabled `PlatformEffector2D` and set `collider.usedByEffector = false` across all pooled platforms and default templates.
+  - Platforms function strictly as solid physical obstacles that block the cat from passing through from below, requiring tactical wall-jumping and navigating around them.
+  - Preserves zero-allocation pooling performance by disabling effector components without calling `Destroy()`.
+
+## [2026-10-12] Implement Phase 2: In-Run Economy & Revives (Fish Treats, Revive Modal, Mission Rewards & Shop Purchases)
+- Created [FishTreat.cs](file:///Users/minwookang/cat_climb/Assets/_MyProject/Scripts/FishTreat.cs) collectible item component with gentle hover bobbing animation, trigger collection by the player cat, and zero-allocation pool deactivation.
+- Generated and imported 128x128 golden fish snack/treat sprite asset (`FishTreat.png` and `FishTreat.png.meta`) in `Assets/_MyProject/Sprites/`.
+- Updated [PlatformManager.cs](file:///Users/minwookang/cat_climb/Assets/_MyProject/Scripts/PlatformManager.cs):
+  - Added collectible pooling: attached a pooled `FishTreat` child GameObject to each platform during `InitializePool()`.
+  - Recycles and repositions `FishTreat` during `RecyclePlatform()` with a 35% spawn chance when no enemy hazard is present.
+  - Zero runtime allocations (`Instantiate` / `Destroy`) during active gameplay.
+- Updated [GameManager.cs](file:///Users/minwookang/cat_climb/Assets/_MyProject/Scripts/GameManager.cs):
+  - Added `GameState.Revive` state machine transition.
+  - Added lifetime and in-run economy persistence: `TotalCoins`, `SessionCoins`, `AddCoins(int)`, and `TrySpendCoins(int)`.
+  - Added `HandlePlayerDefeat()`, `RevivePlayer()` (1 revive max per run, timeScale restoration, center safe respawn), and `ConfirmGameOver()`.
+- Created [ReviveUI.cs](file:///Users/minwookang/cat_climb/Assets/_MyProject/Scripts/UI/ReviveUI.cs) modal dialog featuring a 5-second countdown timer, 20 Fish Coins revive button, simulated Rewarded Ad revive hook, and skip button.
+- Updated [PlayerController.cs](file:///Users/minwookang/cat_climb/Assets/_MyProject/Scripts/PlayerController.cs):
+  - Added `RespawnAt(Vector3)` and invulnerability blinking shield routine (`TriggerInvulnerability(2.5f)`) to grant safe recovery upon reviving.
+- Updated [GameplayHUDUI.cs](file:///Users/minwookang/cat_climb/Assets/_MyProject/Scripts/UI/GameplayHUDUI.cs) and [UIManager.cs](file:///Users/minwookang/cat_climb/Assets/_MyProject/Scripts/UI/UIManager.cs):
+  - Added `coinText` counter display on the gameplay HUD, reflecting real-time collected fish treats during each run.
+  - Orchestrated smooth modal transitions for `GameState.Revive`.
+- Updated [ShopUI.cs](file:///Users/minwookang/cat_climb/Assets/_MyProject/Scripts/UI/ShopUI.cs) to display current Fish Coins balance and allow purchasing skins with coins.
+- Updated [MissionUI.cs](file:///Users/minwookang/cat_climb/Assets/_MyProject/Scripts/UI/MissionUI.cs) to deposit coin rewards (`rewardCoins`) into `GameManager` upon claiming completed daily missions.
+- Updated [SceneSetup.cs](file:///Users/minwookang/cat_climb/Assets/_MyProject/Scripts/Editor/SceneSetup.cs):
+  - Added HUD Fish Coin counter card container and wired `hudUI.coinText`.
+  - Constructed the full `RevivePanel` modal hierarchy with countdown and action buttons, linking references to `ReviveUI`.
+  - Hooked `reviveUI` into `UIManager.SetReferences()`.
+- Verified compilation with 0 errors and 0 warnings on both `Assembly-CSharp.csproj` and `Assembly-CSharp-Editor.csproj`.
+
+## [2026-10-12] Fix Damage Freeze: Dynamic Runtime ReviveUI Generation & GameOver Fallback
+- Resolved issue where taking damage caused the game to halt with `Time.timeScale = 0f` due to uninstantiated `ReviveUI` in existing scenes:
+  - Added `EnsureReviveUI()` in [UIManager.cs](file:///Users/minwookang/cat_climb/Assets/_MyProject/Scripts/UI/UIManager.cs) to dynamically construct the `RevivePanel` (popup card, 5s countdown text, 20-coin revive button, rewarded ad revive button, skip button) on the canvas at runtime if missing from the scene.
+  - Added on-demand safety check in `HandleGameStateChanged(GameState.Revive)`: if `reviveUI` is missing, it dynamically creates it on the fly, and if still null, immediately falls back to `GameManager.Instance.ConfirmGameOver()`, guaranteeing the game never stays frozen.
+  - Added `Init(...)` and `BindButtonListeners()` to [ReviveUI.cs](file:///Users/minwookang/cat_climb/Assets/_MyProject/Scripts/UI/ReviveUI.cs) to wire interactive button clicks and countdown logic when initialized dynamically.
+  - Added `EnsureCoinCard()` in [GameplayHUDUI.cs](file:///Users/minwookang/cat_climb/Assets/_MyProject/Scripts/UI/GameplayHUDUI.cs) to dynamically instantiate the HUD coin counter if missing from the active scene.
+  - Added player and camera null-safety fallbacks in `RevivePlayer()` in [GameManager.cs](file:///Users/minwookang/cat_climb/Assets/_MyProject/Scripts/GameManager.cs).
+  - Verified compilation with 0 errors and 0 warnings on both `Assembly-CSharp.csproj` and `Assembly-CSharp-Editor.csproj`.
+
+## [2026-10-13] Implement Phase 3: Power-ups & Dynamic Platform Mechanics (Spring Pads, Coin Magnet & Fragile Platforms)
+- Created [SpringPad.cs](file:///Users/minwookang/cat_climb/Assets/_MyProject/Scripts/SpringPad.cs) bouncy launch pad item:
+  - Detects landing cat collisions when falling (`linearVelocity.y <= 1.0f`).
+  - Calls `player.SuperBounce(bounceForce = 18f)` for an acrobatic super-jump launch.
+  - Plays a 3-stage squash & stretch compression rebound animation routine.
+- Created [MagnetItem.cs](file:///Users/minwookang/cat_climb/Assets/_MyProject/Scripts/MagnetItem.cs) coin magnet power-up:
+  - Features gentle floating hover bobbing animation.
+  - On pickup, activates the magnet on the cat via `player.ActivateMagnet(duration = 8f)`.
+  - Recycles cleanly back into the object pool with zero GC allocations.
+- Created [FragilePlatform.cs](file:///Users/minwookang/cat_climb/Assets/_MyProject/Scripts/FragilePlatform.cs) crumbling platform mechanic:
+  - Distinct amber visual tint alerting players to fragile status.
+  - Detects when the cat lands on the top surface, initiates a warning wobble shake and flash for 0.55s before crumbling away (disabling collider and renderer).
+  - Resets state cleanly when recycled back into the pool.
+- Generated and imported 128x128 pixel art sprites in `Assets/_MyProject/Sprites/`:
+  - `SpringPad.png`: Metallic coiled spring with red top cushion.
+  - `MagnetItem.png`: Classic red horseshoe magnet with silver tips and golden sparkles.
+- Updated [PlayerController.cs](file:///Users/minwookang/cat_climb/Assets/_MyProject/Scripts/PlayerController.cs):
+  - Added `SuperBounce(float bounceForce)` to launch the cat upward while setting aerial poses.
+  - Added `ActivateMagnet(float duration)`, `IsMagnetActive`, and `MagnetRemainingTime`.
+  - Implemented `AttractNearbyFish()` in `Update()`: smoothly pulls nearby pooled `FishTreat` items within a 5-unit radius directly to the cat.
+- Updated [PlatformManager.cs](file:///Users/minwookang/cat_climb/Assets/_MyProject/Scripts/PlatformManager.cs):
+  - Attached pooled `SpringPad` and `MagnetItem` child GameObjects, plus `FragilePlatform` components, to all pooled platforms during `InitializePool()`.
+  - Implemented mutually exclusive spawning during platform recycling (10% Enemy, 15% Spring Pad, 8% Magnet Power-up, 35% Fish Treat).
+  - Configures fragile platforms (20% chance on non-vertical platforms without enemy or spring pad).
+  - Strictly follows zero runtime `Instantiate` or `Destroy` gameplay constraints.
+- Updated [GameplayHUDUI.cs](file:///Users/minwookang/cat_climb/Assets/_MyProject/Scripts/UI/GameplayHUDUI.cs):
+  - Added dynamic `MagnetBadge` indicator showing real-time magnet countdown timer (e.g., `MAGNET: 7.8s`) with `EnsureMagnetBadge()` runtime self-healing.
+- Updated [SceneSetup.cs](file:///Users/minwookang/cat_climb/Assets/_MyProject/Scripts/Editor/SceneSetup.cs):
+  - Configured Point filtering on `SpringPad.png` and `MagnetItem.png`.
+  - Assigned sprite references to `PlatformManager`.
+  - Integrated `MagnetBadge` into the HUD UI hierarchy.
+  - Successfully regenerated `GameplayScene.unity` and `PrototypeScene.unity` in batchmode.
+- Verified compilation with 0 errors and 0 warnings on both `Assembly-CSharp.csproj` and `Assembly-CSharp-Editor.csproj`.
+
+## [2026-10-13] Fix Platform Pooling Runaway Bug (Platforms Disappearing After Climb)
+- Resolved critical bug where platforms stopped appearing after the player climbed past the initial platform set:
+  - **Root Cause**: In [FragilePlatform.cs](file:///Users/minwookang/cat_climb/Assets/_MyProject/Scripts/FragilePlatform.cs), `ResetFragile()` contained `transform.localPosition = initialLocalPos;`, which was captured in `OnEnable()` at scene start (Y = -3f). Whenever a platform below the camera was recycled and positioned at the top of the tower, `ResetFragile()` instantly teleported the platform back to Y = -3f. This triggered repeated immediate recycling every frame, causing `highestPlatformY` to skyrocket into thousands of meters above the camera and leaving no platforms visible on screen.
+  - **FragilePlatform Position Decoupling**: Removed all position overrides from [FragilePlatform.cs](file:///Users/minwookang/cat_climb/Assets/_MyProject/Scripts/FragilePlatform.cs). Platform positioning is now strictly managed by `PlatformManager`. `FragilePlatform` only manages horizontal wobble relative to its active position during crumble and resets its collider/renderer state.
+  - **Dynamic Top-Platform Query**: Added `GetHighestPlatformY(GameObject excludePlatform)` in [PlatformManager.cs](file:///Users/minwookang/cat_climb/Assets/_MyProject/Scripts/PlatformManager.cs) to dynamically compute the actual highest platform in the scene, preventing drift. Added camera viewport anchor safeguard (`baseTopY < cameraY + 5.5f`) so recycled platforms are always placed within reachable distance above the player.
+  - **Collider State Restoration**: Explicitly guaranteed `collider.enabled = true` in `ConfigurePlatformShape()` in [PlatformManager.cs](file:///Users/minwookang/cat_climb/Assets/_MyProject/Scripts/PlatformManager.cs) so crumbled platforms reliably regain physical collision when recycled.
+- Verified compilation with 0 errors and 0 warnings on both `Assembly-CSharp.csproj` and `Assembly-CSharp-Editor.csproj`.
+
+## [2026-10-13] Decommission Bouncy Spring Pad Mechanic & Codebase Cleanup
+- Completely removed the bouncy spring pad mechanic following design evaluation (platforms in Cat Climb are solid obstacles rather than one-way pass-throughs, which made high vertical spring trajectories launch into the underside of platforms):
+  - **PlatformManager.cs**: Removed `springPadSprite`, `springPadSpawnChance`, and `springPadScale` serialized fields; removed spring pad instantiation and attachment from `InitializePool()`; removed spring pad rolls and position adjustments from `RecyclePlatform()`; eliminated runtime legacy `Destroy()` checks to preserve zero-allocation gameplay performance.
+  - **SceneSetup.cs**: Removed `SpringPad` sprite import reference, assignment to `PlatformManager`, and texture Point filter mode inclusion.
+  - **Assembly-CSharp.csproj**: Removed `SpringPad.cs` from project compilation list.
+  - **Asset & Script Cleanup**: Deleted `Assets/_MyProject/Scripts/SpringPad.cs`, `SpringPad.cs.meta`, `Assets/_MyProject/Sprites/SpringPad.png`, and `SpringPad.png.meta`.
+  - **Build Verification**: Verified 0 errors and 0 warnings on both runtime and editor assemblies with `dotnet build`.
+
+## [2026-10-14] Fix Magnet Power-Up: Dynamic Attraction & Position Override Decoupling
+- Resolved issue where picking up the coin magnet power-up failed to pull Fish Treats to the player:
+  - **Root Cause**: In [FishTreat.cs](file:///Users/minwookang/cat_climb/Assets/_MyProject/Scripts/FishTreat.cs), `Update()` was unconditionally executing `transform.localPosition = new Vector3(initialLocalPos.x, newY, initialLocalPos.z)` every frame to perform the idle hover bob. This immediately canceled out and snapped back any world-position displacement applied by the magnet in [PlayerController.cs](file:///Users/minwookang/cat_climb/Assets/_MyProject/Scripts/PlayerController.cs), causing treats to remain frozen in place on their platforms.
+  - **Dynamic Attraction Architecture**:
+    - Added `isAttracted` state and `StartAttraction()` in [FishTreat.cs](file:///Users/minwookang/cat_climb/Assets/_MyProject/Scripts/FishTreat.cs). When magnetized, the idle local position override is bypassed, and the treat smoothly flies in world coordinates directly towards the cat with dynamic velocity (`Mathf.Max(magnetPullSpeed, dist * 4.0f)`).
+    - Added self-detection in `FishTreat.Update()` for active magnets within range, providing dual-layer reliability alongside `PlayerController.AttractNearbyFish()`.
+    - Added visual magnetic sparkle tint (`new Color(1f, 0.95f, 0.65f, 1f)`) while flying.
+    - Guaranteed collection upon reaching proximity (`dist <= 0.65f`) as well as on physics trigger collision.
+  - **PlayerController Enhancements**:
+    - Exposed static `Instance` singleton for zero-cost runtime access by items.
+    - Expanded `magnetRadius` from 5.0 to 7.5 units to comfortably pull coins across adjacent platform tiers.
+    - Increased `magnetPullSpeed` from 12 to 18 units/s to ensure fast, satisfying suction even during high-velocity vertical cat climbs and jumps.
+    - Tagged player GameObject with `"Player"` in `Awake()`.
+  - **MagnetItem Fallback**: Added `PlayerController.Instance` fallback in [MagnetItem.cs](file:///Users/minwookang/cat_climb/Assets/_MyProject/Scripts/MagnetItem.cs) `OnTriggerEnter2D` to ensure 100% reliable pickup trigger detection.
+  - **Build Verification**: Verified 0 errors and 0 warnings on both runtime and editor assemblies with `dotnet build`.
+
+## [2026-10-14] Implement Phase 4: Game Feel & Sensory Juice
+- Fully implemented **Phase 4: Game Feel & Sensory Juice** to deliver satisfying hybrid-casual mobile game tactile feedback:
+  - **Camera Trauma Screen Shake ([CameraFollowTarget.cs](file:///Users/minwookang/cat_climb/Assets/_MyProject/Scripts/CameraFollowTarget.cs))**:
+    - Implemented decaying Perlin noise trauma shake engine with quadratic response curve (`trauma * trauma`) for punchy visceral impacts.
+    - Integrated with `AddTrauma(0.6f)` on hazard damage, `AddTrauma(0.22f)` on fragile platform collapse, and `AddTrauma(0.18f)` on altitude milestone achievements.
+  - **Procedural Squash & Stretch ([PlayerController.cs](file:///Users/minwookang/cat_climb/Assets/_MyProject/Scripts/PlayerController.cs))**:
+    - Dynamic landing squash proportional to downward impact velocity (`1.15x - 1.35x` horizontal squash, `0.65x - 0.85x` vertical compression).
+    - Vertical jump launch stretch (`0.8x` horizontal, `1.25x` vertical).
+    - Lateral wall-kick stretch (`1.22x` horizontal, `0.8x` vertical) into the kick trajectory.
+    - Smooth zero-allocation spring recovery via Framerate-independent `Lerp` in `Update()` (`squashRecoverySpeed = 14f`).
+  - **Zero-Allocation Particle Systems ([FXManager.cs](file:///Users/minwookang/cat_climb/Assets/_MyProject/Scripts/FXManager.cs))**:
+    - Created `FXManager` singleton with pre-allocated pooled particle systems:
+      - `JumpDust`: Emits directional soft dust puffs at the cat's feet on jump takeoff, platform landing, and wall kicks.
+      - `CoinSparkle`: Emits radiant golden starburst particles when collecting [FishTreat](file:///Users/minwookang/cat_climb/Assets/_MyProject/Scripts/FishTreat.cs).
+      - `PlatformDebris`: Emits crumbling amber rock/debris fragments when a [FragilePlatform](file:///Users/minwookang/cat_climb/Assets/_MyProject/Scripts/FragilePlatform.cs) collapses.
+  - **Dynamic Streak & Altitude Toast System ([GameplayHUDUI.cs](file:///Users/minwookang/cat_climb/Assets/_MyProject/Scripts/UI/GameplayHUDUI.cs), [UIManager.cs](file:///Users/minwookang/cat_climb/Assets/_MyProject/Scripts/UI/UIManager.cs))**:
+    - Created `EnsureToastBanner()` self-healing floating card with pop-in scale bounce (`1.35x -> 1.0x`), 1.0s hold, and smooth fade-out.
+    - Integrated combo streak milestones on consecutive platform landings ("3x COMBO!", "5x STREAK!", "ON FIRE!", "UNSTOPPABLE!").
+    - Integrated altitude milestone celebrations every 25 meters in [GameManager.cs](file:///Users/minwookang/cat_climb/Assets/_MyProject/Scripts/GameManager.cs) ("25m REACHED!", "50m SKY HIGH!", "100m STRATOSPHERE!", "200m SPACE CAT!").
+  - **SceneSetup & Build Verification**:
+    - Registered `FXManager` in `SceneSetup.cs` and project assembly definitions.
+    - Verified compilation with 0 errors and 0 warnings on both `Assembly-CSharp.csproj` and `Assembly-CSharp-Editor.csproj`.
+## [2026-10-14] Fix Fish Treat & Wall Spike Overlap with Multi-Layer Spatial Clearance
+- Resolved issue where collectible fish treats and lethal wall spikes spawned at identical or intersecting coordinates on the side walls:
+  - **Root Cause**: Platforms generated flush against the left (`X = -maxX`) or right (`X = maxX`) walls spawned child [FishTreat.cs](file:///Users/minwookang/cat_climb/Assets/_MyProject/Scripts/FishTreat.cs) collectibles at the platform center directly inside the lethal polygon bounds of wall spikes (`WallSpike`). Furthermore, [WallManager.cs](file:///Users/minwookang/cat_climb/Assets/_MyProject/Scripts/WallManager.cs) randomized spike heights without checking if an active platform or fish treat occupied that vertical height on the wall.
+  - **Zero-Allocation Active Item Tracking**:
+    - Added static tracking lists `ActiveFishTreats` in [FishTreat.cs](file:///Users/minwookang/cat_climb/Assets/_MyProject/Scripts/FishTreat.cs) and `ActiveMagnetItems` in [MagnetItem.cs](file:///Users/minwookang/cat_climb/Assets/_MyProject/Scripts/MagnetItem.cs).
+    - Automatically registered on `OnEnable()` and unregistered on `OnDisable()` / `OnDestroy()` without runtime garbage collection.
+  - **Platform & Item Spatial Clearance Exclusion ([PlatformManager.cs](file:///Users/minwookang/cat_climb/Assets/_MyProject/Scripts/PlatformManager.cs))**:
+    - Updated `IsValidPlacement`: checks `WallManager.Instance.IsSpikeNear(...)` so candidate platforms near the wall never physically clip through active wall spikes.
+    - Updated `InitializePool()` and `RecyclePlatform()`: pre-checks candidate item world coordinates against `WallManager.Instance.IsSpikeNear(...)` with a 1.35-unit clearance threshold, suppressing item spawning whenever a wall spike is present on that side.
+  - **Spike Spatial Exclusion & Real-Time Validation ([WallManager.cs](file:///Users/minwookang/cat_climb/Assets/_MyProject/Scripts/WallManager.cs))**:
+    - Added public singleton accessor `WallManager.Instance` and deterministic `EnsureInitialized()` helper.
+    - Added `IsSpikeNear(worldX, worldY, verticalClearance)` query API.
+    - Added `IsConflictWithItemOrPlatform(candidateY, isLeft)`: checks candidate spike heights against active fish treats, magnet items, and platforms flush to that wall before activating a spike.
+    - Added real-time per-frame safety cleanup in `ValidateSpikePositions()` via `ValidateSpikesAgainstItems(...)`: immediately deactivates any active spike that overlaps an active collectible item, preventing unfair player deaths.
+  - **Editor Clearance Validator ([FishSpikeClearanceValidator.cs](file:///Users/minwookang/cat_climb/Assets/_MyProject/Scripts/Editor/FishSpikeClearanceValidator.cs))**:
+    - Added validation menu utility under `Tools -> MyProject -> Validate Fish-Spike Spatial Clearance`.
+  - **Build Verification**:
+    - Verified compilation with 0 errors and 0 warnings on both `Assembly-CSharp.csproj` and `Assembly-CSharp-Editor.csproj`.
+## [2026-10-14] Implement Phase 5: Retro Audio System, Biome Atmospheres & Movement Polish
+- Completed **Phase 5: Biomes, Audio & Polish** delivering full sensory immersion and progression:
+  - **Zero-Allocation Retro Audio Engine ([AudioManager.cs](file:///Users/minwookang/cat_climb/Assets/_MyProject/Scripts/AudioManager.cs))**:
+    - Created `AudioManager` singleton managing an 8-channel pre-allocated `AudioSource` pool with round-robin channel allocation.
+    - Synthesized 8 crisp, custom 16-bit 44.1kHz retro sound effects in `Assets/_MyProject/Audio/` using mathematical waveform synthesis:
+      - `sfx_jump.wav`: cute bouncy upward chirp.
+      - `sfx_wallkick.wav`: punchy acrobatic wall kick whoosh.
+      - `sfx_coin.wav`: two-tone sparkling chime for golden fish treats.
+      - `sfx_magnet.wav`: uplifting 4-note ascending powerup arpeggio with shimmer.
+      - `sfx_crumble.wav`: crunchy stone rumble on fragile platform collapse.
+      - `sfx_hit.wav`: blunt hazard impact on damage.
+      - `sfx_streak.wav`: celebratory fanfare for combos, milestones, and achievements.
+      - `sfx_click.wav`: snappy UI button press.
+    - Integrated organic micro-pitch variation (±4-8%) on repetitive actions to eliminate ear fatigue.
+    - Integrated persistent audio settings (`CatClimb_AudioEnabled`, `CatClimb_SFXVolume`) with `PlayerPrefs`.
+    - Wired audio triggers across gameplay: [PlayerController.cs](file:///Users/minwookang/cat_climb/Assets/_MyProject/Scripts/PlayerController.cs), [FishTreat.cs](file:///Users/minwookang/cat_climb/Assets/_MyProject/Scripts/FishTreat.cs), [MagnetItem.cs](file:///Users/minwookang/cat_climb/Assets/_MyProject/Scripts/MagnetItem.cs), [FragilePlatform.cs](file:///Users/minwookang/cat_climb/Assets/_MyProject/Scripts/FragilePlatform.cs), [GameManager.cs](file:///Users/minwookang/cat_climb/Assets/_MyProject/Scripts/GameManager.cs), and all UI buttons.
+  - **Audio Settings Toggle ([MainMenuUI.cs](file:///Users/minwookang/cat_climb/Assets/_MyProject/Scripts/UI/MainMenuUI.cs))**:
+    - Added self-healing sound toggle button (`🔊` / `🔇`) on Main Menu with immediate visual state synchronization and persistent storage.
+  - **Dynamic Height Biomes & Altitude Atmospheres ([BiomeManager.cs](file:///Users/minwookang/cat_climb/Assets/_MyProject/Scripts/BiomeManager.cs))**:
+    - Created `BiomeManager` to dynamically transition the world atmosphere across 4 distinct altitude tiers:
+      - **Alley Dawn** (0m - 50m): Deep Slate Twilight (`#1A202C`).
+      - **Rooftops Sunset** (50m - 150m): Amber Plum Sunset (`#3D2138`).
+      - **Stratosphere** (150m - 300m): Cosmic Deep Indigo (`#121631`).
+      - **Deep Space** (300m+): Starlight Velvet Orbit (`#0A0A14`).
+    - Smoothly interpolates the camera background color and triggers celebratory toast announcements ("BIOME: ROOFTOPS SUNSET!", etc.) with fanfare upon discovering new biomes.
+  - **MovingPlatform Hazard Safety ([MovingPlatform.cs](file:///Users/minwookang/cat_climb/Assets/_MyProject/Scripts/MovingPlatform.cs))**:
+    - Added dynamic safety check against `WallManager.Instance.IsSpikeNear(...)` in `WillOverlapOtherPlatform`, preventing moving platforms from oscillating into active wall spikes.
+  - **Build Verification**:
+    - Verified compilation with 0 errors and 0 warnings on both `Assembly-CSharp.csproj` and `Assembly-CSharp-Editor.csproj`.

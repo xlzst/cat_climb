@@ -15,6 +15,8 @@ namespace MyProject.UI
         [SerializeField] private Button skinsButton;
         [SerializeField] private Button missionButton;
         [SerializeField] private Button rankingButton;
+        [SerializeField] private Button soundButton;
+        [SerializeField] private Text soundButtonText;
 
         [Header("Animation Settings")]
         [SerializeField] private bool pulsePlayButton = true;
@@ -42,6 +44,74 @@ namespace MyProject.UI
             {
                 rankingButton.onClick.AddListener(OnRankingClicked);
             }
+
+            EnsureSoundButton();
+            UpdateSoundButtonVisual();
+        }
+
+        private void EnsureSoundButton()
+        {
+            if (soundButton == null && menuPanel != null)
+            {
+                Transform existing = menuPanel.transform.Find("SoundToggleBtn");
+                if (existing != null)
+                {
+                    soundButton = existing.GetComponent<Button>();
+                    soundButtonText = existing.GetComponentInChildren<Text>();
+                }
+                else
+                {
+                    // Dynamically instantiate clean sound toggle button in top right of menu
+                    GameObject btnGo = new GameObject("SoundToggleBtn");
+                    btnGo.transform.SetParent(menuPanel.transform, false);
+
+                    RectTransform rt = btnGo.AddComponent<RectTransform>();
+                    rt.anchorMin = new Vector2(0.90f, 0.94f);
+                    rt.anchorMax = new Vector2(0.90f, 0.94f);
+                    rt.pivot = new Vector2(0.5f, 0.5f);
+                    rt.sizeDelta = new Vector2(90, 90);
+
+                    Image img = btnGo.AddComponent<Image>();
+                    img.color = new Color(0.18f, 0.22f, 0.32f, 0.9f);
+
+                    soundButton = btnGo.AddComponent<Button>();
+
+                    GameObject txtGo = new GameObject("SoundBtnText");
+                    txtGo.transform.SetParent(btnGo.transform, false);
+                    RectTransform txtRt = txtGo.AddComponent<RectTransform>();
+                    txtRt.anchorMin = Vector2.zero;
+                    txtRt.anchorMax = Vector2.one;
+                    txtRt.sizeDelta = Vector2.zero;
+
+                    soundButtonText = txtGo.AddComponent<Text>();
+                    soundButtonText.font = Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf");
+                    soundButtonText.fontSize = 38;
+                    soundButtonText.alignment = TextAnchor.MiddleCenter;
+                    soundButtonText.color = Color.white;
+                }
+            }
+
+            if (soundButton != null)
+            {
+                soundButton.onClick.RemoveListener(OnSoundClicked);
+                soundButton.onClick.AddListener(OnSoundClicked);
+            }
+        }
+
+        private void UpdateSoundButtonVisual()
+        {
+            bool isAudioOn = AudioManager.Instance == null || AudioManager.Instance.IsAudioEnabled;
+            if (soundButtonText != null)
+            {
+                soundButtonText.text = isAudioOn ? "🔊" : "🔇";
+            }
+        }
+
+        private void OnSoundClicked()
+        {
+            AudioManager.Instance?.ToggleAudio();
+            UpdateSoundButtonVisual();
+            AudioManager.Instance?.PlayClick();
         }
 
         private void Update()
@@ -62,6 +132,7 @@ namespace MyProject.UI
             }
 
             UpdateHighScore(highScore);
+            UpdateSoundButtonVisual();
         }
 
         public void Hide()
@@ -82,6 +153,7 @@ namespace MyProject.UI
 
         private void OnPlayClicked()
         {
+            AudioManager.Instance?.PlayClick();
             Debug.Log("[MainMenuUI] Play button pressed. Starting gameplay...");
             if (GameManager.Instance != null)
             {
@@ -91,6 +163,7 @@ namespace MyProject.UI
 
         private void OnSkinsClicked()
         {
+            AudioManager.Instance?.PlayClick();
             Debug.Log("[MainMenuUI] Skins button pressed. Opening Shop...");
             if (UIManager.Instance != null)
             {
@@ -100,6 +173,7 @@ namespace MyProject.UI
 
         private void OnMissionClicked()
         {
+            AudioManager.Instance?.PlayClick();
             Debug.Log("[MainMenuUI] Mission button pressed. Opening Missions...");
             if (UIManager.Instance != null)
             {
@@ -109,6 +183,7 @@ namespace MyProject.UI
 
         private void OnRankingClicked()
         {
+            AudioManager.Instance?.PlayClick();
             Debug.Log("[MainMenuUI] Ranking button pressed. Opening Leaderboard...");
             if (UIManager.Instance != null)
             {

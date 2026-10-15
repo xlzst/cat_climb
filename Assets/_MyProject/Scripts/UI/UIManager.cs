@@ -16,6 +16,7 @@ namespace MyProject.UI
         [SerializeField] private ShopUI shopUI;
         [SerializeField] private MissionUI missionUI;
         [SerializeField] private RankingUI rankingUI;
+        [SerializeField] private ReviveUI reviveUI;
 
         private void Awake()
         {
@@ -30,6 +31,128 @@ namespace MyProject.UI
             }
 
             EnsureInputModule();
+            EnsureReviveUI();
+        }
+
+        private void EnsureReviveUI()
+        {
+            if (reviveUI == null)
+            {
+                reviveUI = GetComponentInChildren<ReviveUI>(true);
+            }
+
+            if (reviveUI == null)
+            {
+                // Programmatically construct RevivePanel hierarchy dynamically on Canvas
+                GameObject reviveGo = CreateUIPanel(transform, "RevivePanel", new Color(0.05f, 0.06f, 0.09f, 0.88f));
+                reviveUI = reviveGo.AddComponent<ReviveUI>();
+
+                GameObject reviveCardGo = CreateUIPanel(reviveGo.transform, "ReviveCard", new Color(0.12f, 0.14f, 0.22f, 0.96f));
+                RectTransform reviveCardRect = reviveCardGo.GetComponent<RectTransform>();
+                reviveCardRect.anchorMin = new Vector2(0.5f, 0.5f);
+                reviveCardRect.anchorMax = new Vector2(0.5f, 0.5f);
+                reviveCardRect.pivot = new Vector2(0.5f, 0.5f);
+                reviveCardRect.sizeDelta = new Vector2(760, 680);
+
+                GameObject reviveTitleGo = CreateUIText(reviveCardGo.transform, "ReviveTitle", "SECOND CHANCE?", 52, FontStyle.Bold, new Color(1f, 0.85f, 0.3f, 1f), TextAnchor.MiddleCenter);
+                RectTransform reviveTitleRect = reviveTitleGo.GetComponent<RectTransform>();
+                reviveTitleRect.anchorMin = new Vector2(0.5f, 0.84f);
+                reviveTitleRect.anchorMax = new Vector2(0.5f, 0.84f);
+                reviveTitleRect.sizeDelta = new Vector2(700, 70);
+
+                GameObject countdownGo = CreateUIText(reviveCardGo.transform, "CountdownText", "5", 72, FontStyle.Bold, new Color(1f, 0.4f, 0.4f, 1f), TextAnchor.MiddleCenter);
+                RectTransform cdRect = countdownGo.GetComponent<RectTransform>();
+                cdRect.anchorMin = new Vector2(0.5f, 0.65f);
+                cdRect.anchorMax = new Vector2(0.5f, 0.65f);
+                cdRect.sizeDelta = new Vector2(200, 90);
+
+                GameObject coinReviveBtnGo = CreateUIButton(reviveCardGo.transform, "CoinReviveButton", "REVIVE (20 FISH)", 30, new Color(0.2f, 0.75f, 0.4f, 1f), Color.white);
+                RectTransform coinReviveBtnRect = coinReviveBtnGo.GetComponent<RectTransform>();
+                coinReviveBtnRect.anchorMin = new Vector2(0.5f, 0.46f);
+                coinReviveBtnRect.anchorMax = new Vector2(0.5f, 0.46f);
+                coinReviveBtnRect.sizeDelta = new Vector2(520, 85);
+                UnityEngine.UI.Button coinReviveBtn = coinReviveBtnGo.GetComponent<UnityEngine.UI.Button>();
+                UnityEngine.UI.Text coinReviveBtnTxt = coinReviveBtnGo.GetComponentInChildren<UnityEngine.UI.Text>();
+
+                GameObject adReviveBtnGo = CreateUIButton(reviveCardGo.transform, "AdReviveButton", "WATCH AD REVIVE", 28, new Color(0.25f, 0.6f, 0.9f, 1f), Color.white);
+                RectTransform adReviveBtnRect = adReviveBtnGo.GetComponent<RectTransform>();
+                adReviveBtnRect.anchorMin = new Vector2(0.5f, 0.30f);
+                adReviveBtnRect.anchorMax = new Vector2(0.5f, 0.30f);
+                adReviveBtnRect.sizeDelta = new Vector2(520, 80);
+                UnityEngine.UI.Button adReviveBtn = adReviveBtnGo.GetComponent<UnityEngine.UI.Button>();
+
+                GameObject skipBtnGo = CreateUIButton(reviveCardGo.transform, "SkipButton", "NO THANKS", 26, new Color(0.4f, 0.45f, 0.55f, 0.8f), Color.white);
+                RectTransform skipBtnRect = skipBtnGo.GetComponent<RectTransform>();
+                skipBtnRect.anchorMin = new Vector2(0.5f, 0.14f);
+                skipBtnRect.anchorMax = new Vector2(0.5f, 0.14f);
+                skipBtnRect.sizeDelta = new Vector2(400, 65);
+                UnityEngine.UI.Button skipBtn = skipBtnGo.GetComponent<UnityEngine.UI.Button>();
+
+                reviveUI.Init(reviveGo, countdownGo.GetComponent<UnityEngine.UI.Text>(), coinReviveBtn, coinReviveBtnTxt, adReviveBtn, skipBtn);
+                reviveGo.SetActive(false);
+                Debug.Log("[UIManager] Dynamically ensured and instantiated ReviveUI on Canvas.");
+            }
+        }
+
+        private GameObject CreateUIPanel(Transform parent, string name, Color bgColor)
+        {
+            GameObject panel = new GameObject(name, typeof(RectTransform), typeof(UnityEngine.UI.Image));
+            panel.transform.SetParent(parent, false);
+
+            RectTransform rect = panel.GetComponent<RectTransform>();
+            rect.anchorMin = Vector2.zero;
+            rect.anchorMax = Vector2.one;
+            rect.offsetMin = Vector2.zero;
+            rect.offsetMax = Vector2.zero;
+
+            UnityEngine.UI.Image img = panel.GetComponent<UnityEngine.UI.Image>();
+            img.color = bgColor;
+            if (bgColor.a <= 0.01f)
+            {
+                img.raycastTarget = false;
+            }
+
+            return panel;
+        }
+
+        private GameObject CreateUIText(Transform parent, string name, string text, int fontSize, FontStyle fontStyle, Color color, TextAnchor alignment)
+        {
+            GameObject textGo = new GameObject(name, typeof(RectTransform), typeof(UnityEngine.UI.Text));
+            textGo.transform.SetParent(parent, false);
+
+            UnityEngine.UI.Text txt = textGo.GetComponent<UnityEngine.UI.Text>();
+            txt.text = text;
+            txt.font = Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf") ?? Font.CreateDynamicFontFromOSFont("Arial", fontSize);
+            txt.fontSize = fontSize;
+            txt.fontStyle = fontStyle;
+            txt.color = color;
+            txt.alignment = alignment;
+            txt.horizontalOverflow = HorizontalWrapMode.Overflow;
+            txt.verticalOverflow = VerticalWrapMode.Overflow;
+            txt.raycastTarget = false;
+
+            return textGo;
+        }
+
+        private GameObject CreateUIButton(Transform parent, string name, string labelText, int fontSize, Color btnColor, Color textColor)
+        {
+            GameObject btnGo = new GameObject(name, typeof(RectTransform), typeof(UnityEngine.UI.Image), typeof(UnityEngine.UI.Button));
+            btnGo.transform.SetParent(parent, false);
+
+            UnityEngine.UI.Image img = btnGo.GetComponent<UnityEngine.UI.Image>();
+            img.color = btnColor;
+
+            UnityEngine.UI.Button btn = btnGo.GetComponent<UnityEngine.UI.Button>();
+            btn.targetGraphic = img;
+
+            GameObject labelGo = CreateUIText(btnGo.transform, "Label", labelText, fontSize, FontStyle.Bold, textColor, TextAnchor.MiddleCenter);
+            RectTransform labelRect = labelGo.GetComponent<RectTransform>();
+            labelRect.anchorMin = Vector2.zero;
+            labelRect.anchorMax = Vector2.one;
+            labelRect.offsetMin = Vector2.zero;
+            labelRect.offsetMax = Vector2.zero;
+
+            return btnGo;
         }
 
         private void EnsureInputModule()
@@ -73,6 +196,7 @@ namespace MyProject.UI
                 GameManager.Instance.OnGameStateChanged += HandleGameStateChanged;
                 GameManager.Instance.OnScoreChanged += HandleScoreChanged;
                 GameManager.Instance.OnHighScoreChanged += HandleHighScoreChanged;
+                GameManager.Instance.OnCoinsChanged += HandleCoinsChanged;
 
                 // Sync UI with initial state
                 HandleGameStateChanged(GameManager.Instance.CurrentState);
@@ -90,6 +214,7 @@ namespace MyProject.UI
                 GameManager.Instance.OnGameStateChanged -= HandleGameStateChanged;
                 GameManager.Instance.OnScoreChanged -= HandleScoreChanged;
                 GameManager.Instance.OnHighScoreChanged -= HandleHighScoreChanged;
+                GameManager.Instance.OnCoinsChanged -= HandleCoinsChanged;
             }
         }
 
@@ -108,6 +233,7 @@ namespace MyProject.UI
                     if (shopUI != null) shopUI.Hide();
                     if (missionUI != null) missionUI.Hide();
                     if (rankingUI != null) rankingUI.Hide();
+                    if (reviveUI != null) reviveUI.Hide();
                     break;
 
                 case GameState.Playing:
@@ -118,6 +244,30 @@ namespace MyProject.UI
                     if (shopUI != null) shopUI.Hide();
                     if (missionUI != null) missionUI.Hide();
                     if (rankingUI != null) rankingUI.Hide();
+                    if (reviveUI != null) reviveUI.Hide();
+                    break;
+
+                case GameState.Revive:
+                    if (mainMenuUI != null) mainMenuUI.Hide();
+                    if (gameplayHUDUI != null) gameplayHUDUI.Hide();
+                    if (gameOverUI != null) gameOverUI.Hide();
+                    if (pauseUI != null) pauseUI.Hide();
+                    if (shopUI != null) shopUI.Hide();
+                    if (missionUI != null) missionUI.Hide();
+                    if (rankingUI != null) rankingUI.Hide();
+                    if (reviveUI == null) EnsureReviveUI();
+                    if (reviveUI != null)
+                    {
+                        reviveUI.Show();
+                    }
+                    else
+                    {
+                        Debug.LogWarning("[UIManager] ReviveUI missing in scene during Revive state -> Falling back to GameOver.");
+                        if (GameManager.Instance != null)
+                        {
+                            GameManager.Instance.ConfirmGameOver();
+                        }
+                    }
                     break;
 
                 case GameState.GameOver:
@@ -128,6 +278,7 @@ namespace MyProject.UI
                     if (shopUI != null) shopUI.Hide();
                     if (missionUI != null) missionUI.Hide();
                     if (rankingUI != null) rankingUI.Hide();
+                    if (reviveUI != null) reviveUI.Hide();
                     break;
 
                 case GameState.Paused:
@@ -210,7 +361,31 @@ namespace MyProject.UI
             }
         }
 
-        public void SetReferences(MainMenuUI mainMenu, GameplayHUDUI hud, GameOverUI gameOver, ShopUI shop = null, MissionUI mission = null, RankingUI ranking = null, PauseUI pause = null)
+        private void HandleCoinsChanged(int totalCoins)
+        {
+            if (gameplayHUDUI != null)
+            {
+                gameplayHUDUI.UpdateCoins(GameManager.Instance != null ? GameManager.Instance.SessionCoins : 0);
+            }
+            if (shopUI != null)
+            {
+                shopUI.RefreshUI();
+            }
+        }
+
+        public void ShowToast(string message, Color? color = null)
+        {
+            if (gameplayHUDUI != null)
+            {
+                gameplayHUDUI.ShowToast(message, color);
+            }
+            else if (GameplayHUDUI.Instance != null)
+            {
+                GameplayHUDUI.Instance.ShowToast(message, color);
+            }
+        }
+
+        public void SetReferences(MainMenuUI mainMenu, GameplayHUDUI hud, GameOverUI gameOver, ShopUI shop = null, MissionUI mission = null, RankingUI ranking = null, PauseUI pause = null, ReviveUI revive = null)
         {
             mainMenuUI = mainMenu;
             gameplayHUDUI = hud;
@@ -219,6 +394,7 @@ namespace MyProject.UI
             missionUI = mission;
             rankingUI = ranking;
             pauseUI = pause;
+            reviveUI = revive;
         }
     }
 }

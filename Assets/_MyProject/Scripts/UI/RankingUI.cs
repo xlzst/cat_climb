@@ -152,6 +152,7 @@ namespace MyProject.UI
 
         private void OnBackClicked()
         {
+            AudioManager.Instance?.PlayClick();
             Hide();
             if (UIManager.Instance != null)
             {

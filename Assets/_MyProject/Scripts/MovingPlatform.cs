@@ -164,6 +164,16 @@ namespace MyProject
                 }
             }
 
+            // Check if moving toward an active wall spike
+            if (WallManager.Instance != null && Mathf.Abs(transform.position.x) > 1.2f)
+            {
+                float targetNextY = transform.position.y + (dir * stepDistance);
+                if (WallManager.Instance.IsSpikeNear(transform.position.x, targetNextY, b.size.y * 0.5f + 0.35f))
+                {
+                    return true;
+                }
+            }
+
             return false;
         }
 
