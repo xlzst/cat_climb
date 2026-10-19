@@ -181,10 +181,84 @@ namespace MyProject
         private Vector2 touchStartScreenPos;
         private float touchStartTime;
         private bool hasSwipedThisTouch;
+        private bool touchStartedOverUI;
         private Vector2 currentPointerScreenPos;
         private Camera mainCamera;
         private bool isInvulnerable = false;
         private Coroutine invulnerabilityCoroutine;
+
+        [Header("Input Forgiveness")]
+        [Tooltip("Grace period after walking off a ledge during which a jump is still allowed.")]
+        [SerializeField] private float coyoteTime = 0.1f;
+        [Tooltip("A jump pressed this long before landing / touching a wall is executed automatically.")]
+        [SerializeField] private float jumpBufferTime = 0.12f;
+        [Tooltip("Grace period after leaving a wall during which a tap still performs a wall kick.")]
+        [SerializeField] private float wallKickGrace = 0.1f;
+        [Tooltip("Duration during which wall-kick lateral momentum overrides steering input (blends back to input).")]
+        [SerializeField] private float wallKickLockDuration = 0.22f;
+        private float kickLockRemaining = 0f;
+        private float kickVelocityX = 0f;
+
+        private float lastGroundedTime = -999f;
+        private float lastWallContactTime = -999f;
+        private float lastWallSideKickDir = 1f;
+        private float bufferedJumpTime = -999f;
+
+        [Header("Combo Settings")]
+        [Tooltip("Minimum height gain (units) between landings for the landing to count toward the combo.")]
+        [SerializeField] private float comboMinHeightGain = 0.6f;
+        [Tooltip("Falling more than this many units below the last combo platform breaks the combo.")]
+        [SerializeField] private float comboBreakFallDistance = 3f;
+        private float lastComboLandY = float.NegativeInfinity;
+        public int ComboCount => comboCount;
+        public event System.Action<int> OnComboChanged;
+
+        // Zero-GC caches
+        private PointerEventData cachedPointerEventData;
+        private readonly System.Collections.Generic.List<RaycastResult> uiRaycastResults = new System.Collections.Generic.List<RaycastResult>(16);
+        private readonly Collider2D[] attackHitBuffer = new Collider2D[8];
+        private ContactFilter2D enemyContactFilter;
+        private int enemyLayer = -1;
+        private bool pointerOverUIThisFrame;
+        private static readonly WaitForSeconds Wait005 = new WaitForSeconds(0.05f);
+        private static readonly WaitForSeconds Wait006 = new WaitForSeconds(0.06f);
+        private static readonly WaitForSeconds Wait012 = new WaitForSeconds(0.12f);
+
+        public const string TILT_PREF_KEY = "CatClimb_TiltEnabled";
+        public const string SELECTED_SKIN_KEY = "CatClimb_SelectedSkin";
+        public const string SELECTED_HAT_KEY = "CatClimb_SelectedHat";
+        public const string SELECTED_TRAIL_KEY = "CatClimb_SelectedTrail";
+
+        [Header("Cosmetic Hat Sprites")]
+        public Sprite hatCrownSprite;
+        public Sprite hatNinjaBandSprite;
+        public Sprite hatPartySprite;
+        public Sprite hatAstroSprite;
+
+        private SpriteRenderer hatRenderer;
+        private TrailRenderer cosmeticTrail;
+        private static Material sharedTrailMat;
+        private static readonly System.Collections.Generic.Dictionary<string, Sprite> runtimeHatSprites = new System.Collections.Generic.Dictionary<string, Sprite>();
+
+        public bool IsTiltControlEnabled => useTiltControl;
+
+        public void SetTiltControlEnabled(bool enabled)
+        {
+            useTiltControl = enabled;
+            PlayerPrefs.SetInt(TILT_PREF_KEY, enabled ? 1 : 0);
+            PlayerPrefs.Save();
+
+            if (enabled && isActiveAndEnabled)
+            {
+                if (GravitySensor.current != null) InputSystem.EnableDevice(GravitySensor.current);
+                if (Accelerometer.current != null) InputSystem.EnableDevice(Accelerometer.current);
+            }
+            else
+            {
+                if (GravitySensor.current != null) InputSystem.DisableDevice(GravitySensor.current);
+                if (Accelerometer.current != null) InputSystem.DisableDevice(Accelerometer.current);
+            }
+        }
 
         private void Awake()
         {
@@ -195,6 +269,13 @@ namespace MyProject
             circleCollider = GetComponent<CircleCollider2D>();
             spriteRenderer = GetComponentInChildren<SpriteRenderer>();
             mainCamera = Camera.main;
+
+            // Tilt steering is opt-in (Settings). Unexpected drift from a slightly tilted phone feels like lost control.
+            useTiltControl = PlayerPrefs.GetInt(TILT_PREF_KEY, 0) == 1;
+
+            enemyLayer = LayerMask.NameToLayer("Enemy");
+            enemyContactFilter = new ContactFilter2D { useTriggers = true };
+            enemyContactFilter.SetLayerMask(LayerMask.GetMask("Enemy"));
 
             // Fallback in case walkingSprite is not assigned
             if (spriteRenderer != null && walkingSprite == null)
@@ -241,12 +322,15 @@ namespace MyProject
 
             if (spriteRenderer != null)
             {
-                string selectedSkinId = PlayerPrefs.GetString("CatClimb_SelectedSkin", "orange");
+                string selectedSkinId = PlayerPrefs.GetString(SELECTED_SKIN_KEY, "orange");
                 spriteRenderer.color = GetSkinColor(selectedSkinId);
             }
+
+            ApplySelectedHat();
+            ApplySelectedTrail();
         }
 
-        private Color GetSkinColor(string skinId)
+        public static Color GetSkinColor(string skinId)
         {
             switch (skinId)
             {
@@ -257,6 +341,350 @@ namespace MyProject
                 case "orange":
                 default:
                     return Color.white;
+            }
+        }
+
+        private void ApplySelectedHat()
+        {
+            if (spriteRenderer == null) return;
+
+            string hatId = PlayerPrefs.GetString(SELECTED_HAT_KEY, "none");
+            if (string.IsNullOrEmpty(hatId) || hatId == "none")
+            {
+                if (hatRenderer != null)
+                {
+                    hatRenderer.enabled = false;
+                }
+                return;
+            }
+
+            if (hatRenderer == null)
+            {
+                Transform existing = spriteRenderer.transform.Find("CatHatVisual");
+                if (existing != null)
+                {
+                    hatRenderer = existing.GetComponent<SpriteRenderer>();
+                }
+                else
+                {
+                    GameObject hatGo = new GameObject("CatHatVisual");
+                    hatGo.transform.SetParent(spriteRenderer.transform, false);
+                    hatRenderer = hatGo.AddComponent<SpriteRenderer>();
+                    hatRenderer.sortingOrder = spriteRenderer.sortingOrder + 2;
+                }
+            }
+
+            Sprite hatSprite = GetHatSprite(hatId);
+            if (hatSprite != null)
+            {
+                hatRenderer.sprite = hatSprite;
+                hatRenderer.color = Color.white;
+                hatRenderer.enabled = true;
+                UpdateHatTransform();
+            }
+            else
+            {
+                hatRenderer.enabled = false;
+            }
+        }
+
+        private void UpdateHatTransform()
+        {
+            if (hatRenderer == null || !hatRenderer.enabled || spriteRenderer == null) return;
+
+            string hatId = PlayerPrefs.GetString(SELECTED_HAT_KEY, "none");
+            float hatScale = 0.30f;
+            float hatOffsetX = 0f;
+            float hatOffsetY = 0.04f;
+
+            switch (hatId)
+            {
+                case "crown":
+                    hatScale = 0.30f;
+                    hatOffsetX = 0.00f;
+                    hatOffsetY = 0.04f;
+                    break;
+                case "ninja_band":
+                    hatScale = 0.32f;
+                    hatOffsetX = 0.03f;
+                    hatOffsetY = -0.04f;
+                    break;
+                case "party":
+                    hatScale = 0.30f;
+                    hatOffsetX = 0.00f;
+                    hatOffsetY = 0.08f;
+                    break;
+                case "astro":
+                    hatScale = 0.38f;
+                    hatOffsetX = -0.01f;
+                    hatOffsetY = -0.06f;
+                    break;
+            }
+
+            // Head anchor in default left-facing sprite space (1.0 unit = 100px on the 128x128 canvas)
+            Sprite currentCatSprite = spriteRenderer.sprite;
+            float headX = -0.22f;
+            float headY = 0.20f;
+
+            if (currentCatSprite == idleSprite || currentCatSprite == transitionSprite)
+            {
+                headX = -0.22f;
+                headY = 0.22f;
+            }
+            else if (currentCatSprite == walkingSprite || currentCatSprite == walkingSprite2 ||
+                     currentCatSprite == walkingSprite3 || currentCatSprite == walkingSprite4)
+            {
+                headX = -0.23f;
+                headY = 0.16f;
+            }
+            else if (currentCatSprite == crouchSprite)
+            {
+                headX = -0.30f;
+                headY = 0.14f;
+            }
+            else if (currentCatSprite == crouchDeepSprite)
+            {
+                headX = -0.18f;
+                headY = 0.05f;
+            }
+            else if (currentCatSprite == climbSprite || currentCatSprite == climbSprite2 ||
+                     currentCatSprite == climbSprite3 || currentCatSprite == climbSprite4)
+            {
+                headX = -0.28f;
+                headY = 0.34f;
+            }
+            else if (currentCatSprite == takeoffSprite || currentCatSprite == launchSprite || currentCatSprite == rise1Sprite)
+            {
+                headX = -0.26f;
+                headY = 0.48f;
+            }
+            else if (currentCatSprite == rise2Sprite || currentCatSprite == verticalJumpSprite)
+            {
+                headX = -0.20f;
+                headY = 0.50f;
+            }
+            else if (currentCatSprite == jumpSprite)
+            {
+                headX = -0.24f;
+                headY = 0.36f;
+            }
+            else if (currentCatSprite == attackSprite1)
+            {
+                headX = -0.12f;
+                headY = 0.38f;
+            }
+            else if (currentCatSprite == attackSprite2 || currentCatSprite == attackSprite3 || currentCatSprite == attackSprite4)
+            {
+                headX = -0.22f;
+                headY = 0.34f;
+            }
+
+            float finalX = headX + hatOffsetX;
+            float finalY = headY + hatOffsetY;
+            if (spriteRenderer.flipX)
+            {
+                finalX = -finalX;
+            }
+
+            hatRenderer.flipX = spriteRenderer.flipX;
+            hatRenderer.transform.localScale = new Vector3(hatScale, hatScale, 1f);
+            hatRenderer.transform.localPosition = new Vector3(finalX, finalY, 0f);
+        }
+
+        public Sprite GetHatSprite(string hatId)
+        {
+#if UNITY_EDITOR
+            if (hatCrownSprite == null) hatCrownSprite = UnityEditor.AssetDatabase.LoadAssetAtPath<Sprite>("Assets/_MyProject/Sprites/HatCrown.png");
+            if (hatNinjaBandSprite == null) hatNinjaBandSprite = UnityEditor.AssetDatabase.LoadAssetAtPath<Sprite>("Assets/_MyProject/Sprites/HatNinjaBand.png");
+            if (hatPartySprite == null) hatPartySprite = UnityEditor.AssetDatabase.LoadAssetAtPath<Sprite>("Assets/_MyProject/Sprites/HatParty.png");
+            if (hatAstroSprite == null) hatAstroSprite = UnityEditor.AssetDatabase.LoadAssetAtPath<Sprite>("Assets/_MyProject/Sprites/HatAstro.png");
+#endif
+            switch (hatId)
+            {
+                case "crown": return hatCrownSprite != null ? hatCrownSprite : GetOrCreateRuntimeHatSprite("crown");
+                case "ninja_band": return hatNinjaBandSprite != null ? hatNinjaBandSprite : GetOrCreateRuntimeHatSprite("ninja_band");
+                case "party": return hatPartySprite != null ? hatPartySprite : GetOrCreateRuntimeHatSprite("party");
+                case "astro": return hatAstroSprite != null ? hatAstroSprite : GetOrCreateRuntimeHatSprite("astro");
+                default: return null;
+            }
+        }
+
+        public static Sprite GetOrCreateRuntimeHatSprite(string hatId)
+        {
+            if (string.IsNullOrEmpty(hatId) || hatId == "none") return null;
+            if (runtimeHatSprites.TryGetValue(hatId, out Sprite cached) && cached != null)
+            {
+                return cached;
+            }
+
+#if UNITY_EDITOR
+            string assetPath = null;
+            if (hatId == "crown") assetPath = "Assets/_MyProject/Sprites/HatCrown.png";
+            else if (hatId == "ninja_band") assetPath = "Assets/_MyProject/Sprites/HatNinjaBand.png";
+            else if (hatId == "party") assetPath = "Assets/_MyProject/Sprites/HatParty.png";
+            else if (hatId == "astro") assetPath = "Assets/_MyProject/Sprites/HatAstro.png";
+
+            if (!string.IsNullOrEmpty(assetPath))
+            {
+                Sprite loaded = UnityEditor.AssetDatabase.LoadAssetAtPath<Sprite>(assetPath);
+                if (loaded != null)
+                {
+                    runtimeHatSprites[hatId] = loaded;
+                    return loaded;
+                }
+            }
+#endif
+            Texture2D tex = new Texture2D(16, 16, TextureFormat.RGBA32, false);
+            tex.filterMode = FilterMode.Point;
+            tex.wrapMode = TextureWrapMode.Clamp;
+
+            Color clear = new Color(0f, 0f, 0f, 0f);
+            for (int y = 0; y < 16; y++)
+                for (int x = 0; x < 16; x++)
+                    tex.SetPixel(x, y, clear);
+
+            if (hatId == "crown")
+            {
+                Color gold = new Color(1f, 0.84f, 0.16f, 1f);
+                Color rim = new Color(0.86f, 0.6f, 0.1f, 1f);
+                Color gem = new Color(0.95f, 0.2f, 0.3f, 1f);
+                for (int x = 3; x <= 12; x++)
+                {
+                    tex.SetPixel(x, 5, rim);
+                    tex.SetPixel(x, 6, gold);
+                    tex.SetPixel(x, 7, gold);
+                    tex.SetPixel(x, 8, gold);
+                }
+                tex.SetPixel(3, 9, gold); tex.SetPixel(3, 10, gold);
+                tex.SetPixel(7, 9, gold); tex.SetPixel(8, 9, gold); tex.SetPixel(7, 10, gold); tex.SetPixel(8, 10, gold);
+                tex.SetPixel(12, 9, gold); tex.SetPixel(12, 10, gold);
+                tex.SetPixel(5, 7, gem); tex.SetPixel(10, 7, gem);
+            }
+            else if (hatId == "ninja_band")
+            {
+                Color red = new Color(0.9f, 0.18f, 0.24f, 1f);
+                Color plate = new Color(0.86f, 0.9f, 0.96f, 1f);
+                for (int x = 2; x <= 13; x++)
+                {
+                    tex.SetPixel(x, 6, red);
+                    tex.SetPixel(x, 7, red);
+                    tex.SetPixel(x, 8, red);
+                }
+                for (int x = 5; x <= 10; x++) tex.SetPixel(x, 7, plate);
+                tex.SetPixel(14, 5, red); tex.SetPixel(15, 4, red);
+            }
+            else if (hatId == "party")
+            {
+                Color pink = new Color(0.96f, 0.32f, 0.68f, 1f);
+                Color cyan = new Color(0.28f, 0.88f, 0.98f, 1f);
+                Color pom = new Color(1f, 0.9f, 0.25f, 1f);
+                for (int row = 0; row < 7; row++)
+                {
+                    int half = 5 - (row / 2);
+                    int y = 5 + row;
+                    for (int x = 8 - half; x <= 7 + half; x++)
+                    {
+                        tex.SetPixel(x, y, (row == 0) ? cyan : pink);
+                    }
+                }
+                tex.SetPixel(7, 12, pom); tex.SetPixel(8, 12, pom);
+                tex.SetPixel(7, 13, pom); tex.SetPixel(8, 13, pom);
+            }
+            else if (hatId == "astro")
+            {
+                Color visor = new Color(0.38f, 0.86f, 1f, 0.82f);
+                Color rim = new Color(0.92f, 0.95f, 1f, 1f);
+                for (int y = 5; y <= 13; y++)
+                {
+                    for (int x = 2; x <= 13; x++)
+                    {
+                        float dx = x - 7.5f;
+                        float dy = y - 9f;
+                        float distSq = dx * dx + dy * dy;
+                        if (distSq <= 26f)
+                        {
+                            tex.SetPixel(x, y, (distSq >= 17f || y == 5) ? rim : visor);
+                        }
+                    }
+                }
+            }
+
+            tex.Apply();
+            Sprite sp = Sprite.Create(tex, new Rect(0, 0, 16, 16), new Vector2(0.5f, 0.5f), 16f);
+            runtimeHatSprites[hatId] = sp;
+            return sp;
+        }
+
+        private void ApplySelectedTrail()
+        {
+            string trailId = PlayerPrefs.GetString(SELECTED_TRAIL_KEY, "none");
+            if (string.IsNullOrEmpty(trailId) || trailId == "none")
+            {
+                if (cosmeticTrail != null)
+                {
+                    cosmeticTrail.emitting = false;
+                    cosmeticTrail.Clear();
+                }
+                return;
+            }
+
+            if (cosmeticTrail == null)
+            {
+                Transform existing = transform.Find("CatTrailVisual");
+                if (existing != null)
+                {
+                    cosmeticTrail = existing.GetComponent<TrailRenderer>();
+                }
+                else
+                {
+                    GameObject trailGo = new GameObject("CatTrailVisual");
+                    trailGo.transform.SetParent(transform, false);
+                    trailGo.transform.localPosition = new Vector3(0f, -0.05f, 0f);
+                    cosmeticTrail = trailGo.AddComponent<TrailRenderer>();
+                    cosmeticTrail.time = 0.28f;
+                    cosmeticTrail.minVertexDistance = 0.08f;
+                    cosmeticTrail.startWidth = 0.24f;
+                    cosmeticTrail.endWidth = 0.0f;
+                    cosmeticTrail.numCornerVertices = 2;
+                    cosmeticTrail.numCapVertices = 2;
+                    cosmeticTrail.sortingOrder = (spriteRenderer != null ? spriteRenderer.sortingOrder : 10) - 1;
+
+                    if (sharedTrailMat == null)
+                    {
+                        Shader sh = Shader.Find("Sprites/Default");
+                        if (sh != null) sharedTrailMat = new Material(sh);
+                    }
+                    if (sharedTrailMat != null)
+                    {
+                        cosmeticTrail.sharedMaterial = sharedTrailMat;
+                    }
+                }
+            }
+
+            Color startCol = GetTrailColor(trailId, out Color endCol);
+            Gradient grad = new Gradient();
+            grad.SetKeys(
+                new GradientColorKey[] { new GradientColorKey(startCol, 0f), new GradientColorKey(endCol, 1f) },
+                new GradientAlphaKey[] { new GradientAlphaKey(0.80f, 0f), new GradientAlphaKey(0f, 1f) }
+            );
+            cosmeticTrail.colorGradient = grad;
+            cosmeticTrail.emitting = true;
+        }
+
+        public static Color GetTrailColor(string trailId, out Color endColor)
+        {
+            switch (trailId)
+            {
+                case "sakura":
+                    endColor = new Color(1f, 0.85f, 0.92f, 0f);
+                    return new Color(1f, 0.55f, 0.78f, 1f);
+                case "starlight":
+                    endColor = new Color(1f, 0.95f, 0.5f, 0f);
+                    return new Color(1f, 0.84f, 0.15f, 1f);
+                case "cyber":
+                default:
+                    endColor = new Color(0.6f, 0.3f, 1f, 0f);
+                    return new Color(0.18f, 0.92f, 1f, 1f);
             }
         }
 
@@ -287,46 +715,40 @@ namespace MyProject
             }
         }
 
+        /// <summary>
+        /// Returns whether the active pointer is over an interactive UI element this frame.
+        /// The value is computed once per frame in <see cref="Update"/> (zero allocations).
+        /// </summary>
         private bool IsPointerOverUI()
+        {
+            return pointerOverUIThisFrame;
+        }
+
+        private bool ComputePointerOverUI(Vector2 pointerPosition)
         {
             if (EventSystem.current == null) return false;
 
-            Vector2 pointerPosition = Vector2.zero;
-            if (Pointer.current != null)
+            if (cachedPointerEventData == null)
             {
-                pointerPosition = Pointer.current.position.ReadValue();
+                cachedPointerEventData = new PointerEventData(EventSystem.current);
             }
-            else if (Mouse.current != null)
-            {
-                pointerPosition = Mouse.current.position.ReadValue();
-            }
-            else if (Touchscreen.current != null && Touchscreen.current.primaryTouch.press.isPressed)
-            {
-                pointerPosition = Touchscreen.current.primaryTouch.position.ReadValue();
-            }
-            else
-            {
-                return false;
-            }
+            cachedPointerEventData.Reset();
+            cachedPointerEventData.position = pointerPosition;
 
-            PointerEventData eventData = new PointerEventData(EventSystem.current)
-            {
-                position = pointerPosition
-            };
+            uiRaycastResults.Clear();
+            EventSystem.current.RaycastAll(cachedPointerEventData, uiRaycastResults);
 
-            var results = new System.Collections.Generic.List<RaycastResult>();
-            EventSystem.current.RaycastAll(eventData, results);
-
-            foreach (var result in results)
+            for (int i = 0; i < uiRaycastResults.Count; i++)
             {
-                if (result.gameObject != null &&
-                    (result.gameObject.GetComponentInParent<UnityEngine.UI.Selectable>() != null ||
-                     result.gameObject.GetComponent<UnityEngine.UI.Button>() != null))
+                GameObject hitGo = uiRaycastResults[i].gameObject;
+                if (hitGo != null && hitGo.GetComponentInParent<UnityEngine.UI.Selectable>() != null)
                 {
+                    uiRaycastResults.Clear();
                     return true;
                 }
             }
 
+            uiRaycastResults.Clear();
             return false;
         }
 
@@ -396,20 +818,34 @@ namespace MyProject
 
             currentPointerScreenPos = pointerScreenPos;
 
+            // Single UI raycast per frame (only when a pointer is actually active)
+            pointerOverUIThisFrame = (isPointerHeld || pointerUpThisFrame) && ComputePointerOverUI(pointerScreenPos);
+
             // Handle touch begin
             if (pointerDownThisFrame)
             {
-                if (!IsPointerOverUI())
+                touchStartedOverUI = pointerOverUIThisFrame;
+                if (!touchStartedOverUI)
                 {
                     touchStartScreenPos = pointerScreenPos;
                     touchStartTime = Time.time;
                     hasSwipedThisTouch = false;
                 }
-                else
-                {
-                    isPointerHeld = false;
-                }
             }
+
+            // A touch that began on a button belongs to the UI for its entire lifetime
+            if (touchStartedOverUI)
+            {
+                pointerOverUIThisFrame = true;
+                if (pointerUpThisFrame) touchStartedOverUI = false;
+            }
+            if (pointerOverUIThisFrame)
+            {
+                isPointerHeld = false;
+            }
+
+            // Execute a buffered jump as soon as it becomes possible
+            TryConsumeBufferedJump();
 
             // 2. Keyboard horizontal input detection (Arrow keys / A & D)
             horizontalInput = 0f;
@@ -472,7 +908,7 @@ namespace MyProject
                     climbInput = true;
                 }
             }
-            isClimbing = isTouchingWall && climbInput;
+            isClimbing = isTouchingWall && climbInput && kickLockRemaining <= 0f;
 
             // 5. Swipe gesture detection
             if (isPointerHeld && !hasSwipedThisTouch && !IsPointerOverUI())
@@ -495,49 +931,95 @@ namespace MyProject
 
                 if (touchDuration <= maxSwipeDuration && touchDistance < minSwipeDistance)
                 {
-                    if (isTouchingWall)
-                    {
-                        // Tap while touching wall executes a Wall Kick away from the wall
-                        float wallKickDir = isTouchingLeftWall ? 1f : -1f;
-                        ExecuteWallKick(wallKickDir);
-                    }
-                    else if (isGrounded || allowInfiniteJumps)
-                    {
-                        Jump();
-                    }
-                    else
-                    {
-                        MeleeAttack();
-                    }
+                    HandleTapAction();
                 }
             }
 
             // 7. Keyboard Space / Jump triggers
             if (Keyboard.current != null && Keyboard.current.spaceKey.wasPressedThisFrame)
             {
-                if (isTouchingWall)
-                {
-                    float wallKickDir = isTouchingLeftWall ? 1f : -1f;
-                    ExecuteWallKick(wallKickDir);
-                }
-                else if (isGrounded || allowInfiniteJumps)
-                {
-                    Jump();
-                }
-                else
-                {
-                    MeleeAttack();
-                }
+                HandleTapAction();
+            }
+        }
+
+        // ---------------------------------------------------------------
+        // Forgiving action resolution (coyote time / wall-kick grace / jump buffer)
+        // ---------------------------------------------------------------
+
+        private bool IsInCoyoteWindow()
+        {
+            return !isGrounded && (Time.time - lastGroundedTime) <= coyoteTime && rb.linearVelocity.y <= 0.15f;
+        }
+
+        private bool TryGetWallKickDirection(out float kickDir)
+        {
+            if (isTouchingWall)
+            {
+                kickDir = isTouchingLeftWall ? 1f : -1f;
+                return true;
+            }
+            if (!isGrounded && (Time.time - lastWallContactTime) <= wallKickGrace)
+            {
+                kickDir = lastWallSideKickDir;
+                return true;
+            }
+            kickDir = 0f;
+            return false;
+        }
+
+        private bool CanGroundJump()
+        {
+            return isGrounded || allowInfiniteJumps || IsInCoyoteWindow();
+        }
+
+        /// <summary>
+        /// Tap / Space: wall kick if on (or just left) a wall, jump if grounded (or within coyote time),
+        /// otherwise buffer the jump and perform an aerial melee swipe.
+        /// </summary>
+        private void HandleTapAction()
+        {
+            if (TryGetWallKickDirection(out float kickDir))
+            {
+                ExecuteWallKick(kickDir);
+                return;
+            }
+
+            if (CanGroundJump())
+            {
+                Jump();
+                return;
+            }
+
+            bufferedJumpTime = Time.time;
+            MeleeAttack();
+        }
+
+        private void TryConsumeBufferedJump()
+        {
+            if (bufferedJumpTime < 0f) return;
+
+            if (Time.time - bufferedJumpTime > jumpBufferTime)
+            {
+                bufferedJumpTime = -999f;
+                return;
+            }
+
+            if (isTouchingWall)
+            {
+                bufferedJumpTime = -999f;
+                ExecuteWallKick(isTouchingLeftWall ? 1f : -1f);
+            }
+            else if (isGrounded)
+            {
+                bufferedJumpTime = -999f;
+                Jump();
             }
         }
 
         private void ProcessSwipe(Vector2 swipeDelta)
         {
-            if (isTouchingWall)
+            if (TryGetWallKickDirection(out float wallKickDir))
             {
-                // Left wall kicks right (+1), Right wall kicks left (-1)
-                float wallKickDir = isTouchingLeftWall ? 1f : -1f;
-
                 // If swipe is directed away from wall OR upwards
                 if (Mathf.Sign(swipeDelta.x) == Mathf.Sign(wallKickDir) || swipeDelta.y > 0f)
                 {
@@ -546,13 +1028,14 @@ namespace MyProject
                 }
             }
 
-            if (isGrounded || allowInfiniteJumps)
+            if (swipeDelta.y > 0f)
             {
-                if (swipeDelta.y > 0f)
+                if (CanGroundJump())
                 {
                     Jump();
                     return;
                 }
+                bufferedJumpTime = Time.time;
             }
 
             // Mid-air swipe triggers melee attack
@@ -587,10 +1070,21 @@ namespace MyProject
             // Apply diagonal wall kick impulse
             rb.linearVelocity = new Vector2(kickDirX * wallKickForceX, wallKickForceY);
 
+            // Preserve the lateral kick momentum briefly so FixedUpdate steering doesn't erase it
+            kickVelocityX = kickDirX * wallKickForceX;
+            kickLockRemaining = wallKickLockDuration;
+
+            // Consume forgiveness windows so one input can't trigger two actions
+            lastWallContactTime = -999f;
+            lastGroundedTime = -999f;
+            bufferedJumpTime = -999f;
+
             // Wall-kick lateral stretch and dust puff
             ApplySquashAndStretch(1.22f, 0.8f);
             FXManager.Instance?.EmitJumpDust(transform.position + new Vector3(-kickDirX * 0.25f, -0.1f, 0f), new Vector2(kickDirX, 0.4f));
             AudioManager.Instance?.PlayWallKick();
+            Haptics.Light();
+            GameManager.Instance?.RecordWallKick();
 
             // Snappy visual response
             currentVisualState = (kickDirX < 0f) ? CatState.JumpingLeft : CatState.JumpingRight;
@@ -645,7 +1139,7 @@ namespace MyProject
         public void ActivateMagnet(float duration)
         {
             magnetRemainingTime = Mathf.Max(magnetRemainingTime, duration);
-            Debug.Log($"[PlayerController] Magnet power-up activated for {duration} seconds!");
+            Haptics.Light();
         }
 
         private void UpdateMagnet()
@@ -659,31 +1153,19 @@ namespace MyProject
 
         private void AttractNearbyFish()
         {
-            if (PlatformManager.Instance == null) return;
-            var pool = PlatformManager.Instance.PlatformPool;
-            if (pool == null) return;
-
+            var treats = FishTreat.ActiveFishTreats;
             Vector3 playerPos = transform.position;
             float magnetRadiusSq = magnetRadius * magnetRadius;
 
-            for (int i = 0; i < pool.Count; i++)
+            for (int i = treats.Count - 1; i >= 0; i--)
             {
-                GameObject platform = pool[i];
-                if (platform == null || !platform.activeInHierarchy) continue;
+                FishTreat treat = treats[i];
+                if (treat == null) continue;
 
-                Transform treatTransform = platform.transform.Find("FishTreat");
-                if (treatTransform != null && treatTransform.gameObject.activeSelf)
+                float distSq = (playerPos - treat.transform.position).sqrMagnitude;
+                if (distSq <= magnetRadiusSq)
                 {
-                    Vector3 treatPos = treatTransform.position;
-                    float distSq = (playerPos - treatPos).sqrMagnitude;
-                    if (distSq <= magnetRadiusSq)
-                    {
-                        FishTreat treat = treatTransform.GetComponent<FishTreat>();
-                        if (treat != null)
-                        {
-                            treat.StartAttraction();
-                        }
-                    }
+                    treat.StartAttraction();
                 }
             }
         }
@@ -692,6 +1174,7 @@ namespace MyProject
         {
             // 1. Ground detection
             bool wasGroundedBefore = isGrounded;
+            Collider2D groundCollider = null;
             if (!allowInfiniteJumps)
             {
                 // When leaping rapidly upwards through one-way platforms, player cannot be grounded
@@ -710,6 +1193,7 @@ namespace MyProject
                         if (castResults[i].collider != null && castResults[i].collider.gameObject != gameObject)
                         {
                             isGrounded = true;
+                            groundCollider = castResults[i].collider;
                             break;
                         }
                     }
@@ -720,11 +1204,22 @@ namespace MyProject
                 isGrounded = true;
             }
 
+            if (isGrounded)
+            {
+                lastGroundedTime = Time.time;
+            }
+
             if (!wasGroundedBefore && isGrounded)
             {
-                OnLanded();
+                OnLanded(groundCollider);
             }
             lastVerticalVelocity = rb.linearVelocity.y;
+
+            // Falling well below the last combo platform breaks the streak
+            if (comboCount > 0 && transform.position.y < lastComboLandY - comboBreakFallDistance)
+            {
+                BreakCombo();
+            }
 
             // 2. Wall detection (left and right cast)
             float wallCastDistance = 0.06f;
@@ -755,6 +1250,12 @@ namespace MyProject
 
             isTouchingWall = isTouchingLeftWall || isTouchingRightWall;
 
+            if (isTouchingWall && !isGrounded)
+            {
+                lastWallContactTime = Time.time;
+                lastWallSideKickDir = isTouchingLeftWall ? 1f : -1f;
+            }
+
             // 3. Apply vertical movement (climbing vs wall slide vs gravity)
             float targetVerticalVelocity = rb.linearVelocity.y;
             isWallSliding = false;
@@ -771,13 +1272,23 @@ namespace MyProject
                 targetVerticalVelocity = Mathf.Max(rb.linearVelocity.y, wallSlideSpeed);
             }
 
-            // 4. Apply final velocities
-            rb.linearVelocity = new Vector2(horizontalInput * moveSpeed, targetVerticalVelocity);
+            // 4. Horizontal velocity: steering input, blended with wall-kick momentum right after a kick
+            float targetHorizontalVelocity = horizontalInput * moveSpeed;
+            if (kickLockRemaining > 0f)
+            {
+                float kickWeight = Mathf.Clamp01(kickLockRemaining / Mathf.Max(0.01f, wallKickLockDuration));
+                targetHorizontalVelocity = Mathf.Lerp(targetHorizontalVelocity, kickVelocityX, kickWeight);
+                kickLockRemaining -= Time.fixedDeltaTime;
+            }
+
+            // 5. Apply final velocities
+            rb.linearVelocity = new Vector2(targetHorizontalVelocity, targetVerticalVelocity);
         }
 
         public void Jump()
         {
-            if (isGrounded || isTouchingWall || isClimbing || allowInfiniteJumps)
+            bool inCoyote = IsInCoyoteWindow();
+            if (isGrounded || inCoyote || isTouchingWall || isClimbing || allowInfiniteJumps)
             {
                 if (isTouchingWall)
                 {
@@ -789,7 +1300,7 @@ namespace MyProject
                 bool physicallyGrounded = false;
                 if (!allowInfiniteJumps)
                 {
-                    physicallyGrounded = isGrounded;
+                    physicallyGrounded = isGrounded || inCoyote;
                 }
                 else
                 {
@@ -805,6 +1316,10 @@ namespace MyProject
                         }
                     }
                 }
+
+                // Consume forgiveness windows
+                lastGroundedTime = -999f;
+                bufferedJumpTime = -999f;
 
                 if (physicallyGrounded && !isClimbing)
                 {
@@ -822,6 +1337,9 @@ namespace MyProject
                         StopCoroutine(attackCoroutine);
                         attackCoroutine = null;
                     }
+
+                    // Physics impulse is applied on the input frame; the coroutine only plays cosmetic frames.
+                    ApplyGroundJumpImpulse();
                     jumpTransitionCoroutine = StartCoroutine(AnimateJumpTransition());
                 }
                 else
@@ -834,7 +1352,16 @@ namespace MyProject
             }
         }
 
-        private void OnLanded()
+        private void ApplyGroundJumpImpulse()
+        {
+            isGrounded = false;
+            rb.linearVelocity = new Vector2(rb.linearVelocity.x, jumpForce);
+            ApplySquashAndStretch(0.8f, 1.25f);
+            FXManager.Instance?.EmitJumpDust(transform.position + Vector3.down * 0.28f, Vector2.down);
+            AudioManager.Instance?.PlayJump();
+        }
+
+        private void OnLanded(Collider2D groundCollider)
         {
             float impactSpeed = Mathf.Abs(lastVerticalVelocity);
             float squashX = Mathf.Clamp(1.0f + impactSpeed * 0.035f, 1.15f, 1.35f);
@@ -843,27 +1370,67 @@ namespace MyProject
 
             FXManager.Instance?.EmitJumpDust(transform.position + Vector3.down * 0.25f, Vector2.up);
 
-            comboCount++;
-            if (comboCount == 3)
+            UpdateComboOnLanding(groundCollider);
+        }
+
+        /// <summary>
+        /// Combo = consecutive landings on NEW, HIGHER platforms. Re-landing on the same platform does nothing;
+        /// touching the starting floor, falling far, or getting hit resets it. Milestones pay fish.
+        /// </summary>
+        private void UpdateComboOnLanding(Collider2D groundCollider)
+        {
+            float landY = transform.position.y;
+            bool onPlatform = groundCollider != null && PlatformManager.Instance != null &&
+                              PlatformManager.Instance.IsPlatform(groundCollider.gameObject);
+
+            if (!onPlatform)
             {
-                UIManager.Instance?.ShowToast("3x COMBO!", new Color(0.4f, 0.95f, 0.5f, 1f));
-                AudioManager.Instance?.PlayStreak();
+                BreakCombo();
+                lastComboLandY = landY;
+                return;
             }
-            else if (comboCount == 5)
+
+            if (landY > lastComboLandY + comboMinHeightGain)
             {
-                UIManager.Instance?.ShowToast("5x STREAK!", new Color(0.3f, 0.85f, 1f, 1f));
-                AudioManager.Instance?.PlayStreak();
+                comboCount++;
+                lastComboLandY = landY;
+                OnComboChanged?.Invoke(comboCount);
+                GameManager.Instance?.ReportCombo(comboCount);
+                RewardComboMilestone(comboCount);
             }
-            else if (comboCount == 8)
+            else if (landY < lastComboLandY - comboBreakFallDistance)
             {
-                UIManager.Instance?.ShowToast("ON FIRE!", new Color(1f, 0.5f, 0.2f, 1f));
-                AudioManager.Instance?.PlayStreak();
+                BreakCombo();
+                lastComboLandY = landY;
             }
-            else if (comboCount == 12)
-            {
-                UIManager.Instance?.ShowToast("UNSTOPPABLE!", new Color(1f, 0.3f, 0.85f, 1f));
-                AudioManager.Instance?.PlayStreak();
-            }
+        }
+
+        private void RewardComboMilestone(int combo)
+        {
+            int bonusFish = 0;
+            string label = null;
+            Color color = Color.white;
+
+            if (combo == 3) { bonusFish = 1; label = "3x COMBO!"; color = new Color(0.4f, 0.95f, 0.5f, 1f); }
+            else if (combo == 5) { bonusFish = 2; label = "5x STREAK!"; color = new Color(0.3f, 0.85f, 1f, 1f); }
+            else if (combo == 8) { bonusFish = 3; label = "ON FIRE!"; color = new Color(1f, 0.5f, 0.2f, 1f); }
+            else if (combo == 12) { bonusFish = 5; label = "UNSTOPPABLE!"; color = new Color(1f, 0.3f, 0.85f, 1f); }
+            else if (combo > 12 && (combo - 12) % 4 == 0) { bonusFish = 5; label = $"{combo}x UNSTOPPABLE!"; color = new Color(1f, 0.3f, 0.85f, 1f); }
+
+            if (bonusFish <= 0) return;
+
+            GameManager.Instance?.AddCoins(bonusFish);
+            UIManager.Instance?.ShowToast($"{label}  +{bonusFish} FISH", color);
+            AudioManager.Instance?.PlayStreak();
+            FXManager.Instance?.EmitCoinSparkle(transform.position + Vector3.up * 0.4f);
+            Haptics.Light();
+        }
+
+        private void BreakCombo()
+        {
+            if (comboCount == 0) return;
+            comboCount = 0;
+            OnComboChanged?.Invoke(0);
         }
 
         private void ApplySquashAndStretch(float multX, float multY)
@@ -876,8 +1443,6 @@ namespace MyProject
 
         private void MeleeAttack()
         {
-            Debug.Log("[PlayerController] Melee attack triggered!");
-
             if (gameObject.activeInHierarchy)
             {
                 if (attackCoroutine != null)
@@ -891,18 +1456,19 @@ namespace MyProject
             float dirX = (facingDirectionX != 0f) ? facingDirectionX : 1f;
             Vector2 attackCenter = (Vector2)transform.position + new Vector2(dirX * attackOffset, 0f);
 
-            // Spatial query on "Enemy" layer using OverlapCircleAll (highly performant, zero GC/instantiation overhead)
-            int enemyLayerMask = LayerMask.GetMask("Enemy");
-            Collider2D[] hitEnemies = Physics2D.OverlapCircleAll(attackCenter, attackRadius, enemyLayerMask);
+            // Non-allocating spatial query on the "Enemy" layer
+            int hitCount = Physics2D.OverlapCircle(attackCenter, attackRadius, enemyContactFilter, attackHitBuffer);
 
-            for (int i = 0; i < hitEnemies.Length; i++)
+            for (int i = 0; i < hitCount; i++)
             {
-                Collider2D hit = hitEnemies[i];
+                Collider2D hit = attackHitBuffer[i];
+                if (hit == null) continue;
                 Enemy enemyComponent = hit.GetComponent<Enemy>();
                 if (enemyComponent != null)
                 {
                     enemyComponent.TakeDamage();
                 }
+                attackHitBuffer[i] = null;
             }
         }
 
@@ -911,15 +1477,9 @@ namespace MyProject
             if (isInvulnerable) return;
 
             // Trigger Defeat if we collide with a solid hazard on the "Enemy" layer (e.g. wall spikes)
-            if (collision.gameObject.layer == LayerMask.NameToLayer("Enemy"))
+            if (collision.gameObject.layer == enemyLayer)
             {
-                CameraFollowTarget.Instance?.AddTrauma(0.6f);
-                comboCount = 0;
-                AudioManager.Instance?.PlayHit();
-                if (GameManager.Instance != null)
-                {
-                    GameManager.Instance.HandlePlayerDefeat();
-                }
+                OnHazardHit();
             }
         }
 
@@ -928,27 +1488,41 @@ namespace MyProject
             if (isInvulnerable) return;
 
             // Trigger Defeat if we overlap with a trigger hazard on the "Enemy" layer (e.g. platform enemy triangles)
-            if (other.gameObject.layer == LayerMask.NameToLayer("Enemy"))
+            if (other.gameObject.layer == enemyLayer)
             {
-                CameraFollowTarget.Instance?.AddTrauma(0.6f);
-                comboCount = 0;
-                AudioManager.Instance?.PlayHit();
-                if (GameManager.Instance != null)
-                {
-                    GameManager.Instance.HandlePlayerDefeat();
-                }
+                OnHazardHit();
+            }
+        }
+
+        private void OnHazardHit()
+        {
+            if (GameManager.Instance != null && GameManager.Instance.CurrentState != GameState.Playing) return;
+
+            CameraFollowTarget.Instance?.AddTrauma(0.6f);
+            BreakCombo();
+            AudioManager.Instance?.PlayHit();
+            Haptics.Heavy();
+            if (GameManager.Instance != null)
+            {
+                GameManager.Instance.HandlePlayerDefeat(true);
             }
         }
 
         public void RespawnAt(Vector3 respawnPos)
         {
-            comboCount = 0;
+            BreakCombo();
+            lastComboLandY = float.NegativeInfinity;
+            kickLockRemaining = 0f;
+            bufferedJumpTime = -999f;
+            lastWallContactTime = -999f;
+            lastGroundedTime = -999f;
+
             transform.position = respawnPos;
             if (rb == null) rb = GetComponent<Rigidbody2D>();
             if (rb != null)
             {
                 rb.bodyType = RigidbodyType2D.Dynamic;
-                rb.linearVelocity = new Vector2(0f, 4.5f); // Gentle upward hop on revive
+                rb.linearVelocity = new Vector2(0f, 2.5f); // Gentle hop that settles back onto the safe platform
             }
             enabled = true;
             isClimbing = false;
@@ -980,12 +1554,12 @@ namespace MyProject
                 {
                     spriteRenderer.color = new Color(baseColor.r, baseColor.g, baseColor.b, 0.35f);
                 }
-                yield return new WaitForSeconds(0.12f);
+                yield return Wait012;
                 if (spriteRenderer != null)
                 {
                     spriteRenderer.color = baseColor;
                 }
-                yield return new WaitForSeconds(0.12f);
+                yield return Wait012;
                 elapsed += 0.24f;
             }
 
@@ -1045,6 +1619,7 @@ namespace MyProject
                 // 3. If jump transition is running, let it control the sprite
                 if (jumpTransitionCoroutine != null)
                 {
+                    UpdateHatTransform();
                     wasGrounded = isGrounded;
                     return;
                 }
@@ -1053,6 +1628,7 @@ namespace MyProject
                 if (landingTransitionCoroutine != null)
                 {
                     spriteRenderer.flipX = facingDirectionX > 0f;
+                    UpdateHatTransform();
                     wasGrounded = isGrounded;
                     return;
                 }
@@ -1061,6 +1637,7 @@ namespace MyProject
                 if (attackCoroutine != null)
                 {
                     spriteRenderer.flipX = facingDirectionX > 0f;
+                    UpdateHatTransform();
                     wasGrounded = isGrounded;
                     return;
                 }
@@ -1121,8 +1698,9 @@ namespace MyProject
                 if (transitionCoroutine == null)
                 {
                     ApplySpriteState(currentVisualState);
-                    spriteRenderer.transform.localScale = new Vector3(0.5f, 0.5f, 1f);
                 }
+
+                UpdateHatTransform();
             }
 
             wasGrounded = isGrounded;
@@ -1195,78 +1773,43 @@ namespace MyProject
             // Capture initial jump input at the moment of jump trigger
             float jumpDirectionX = horizontalInput;
             bool isVertical = Mathf.Approximately(jumpDirectionX, 0f);
-            bool isRight = jumpDirectionX > 0f;
+            bool isRight = isVertical ? (facingDirectionX > 0f) : (jumpDirectionX > 0f);
 
-            // Frame 1: Crouch 1
-            if (isVertical)
-            {
-                if (crouchDeepSprite != null) spriteRenderer.sprite = crouchDeepSprite;
-                spriteRenderer.flipX = false;
-            }
-            else
-            {
-                if (crouchSprite != null) spriteRenderer.sprite = crouchSprite;
-                spriteRenderer.flipX = isRight;
-            }
-            yield return new WaitForSeconds(0.05f);
-
-            // Frame 2: Crouch 2
-            if (isVertical)
-            {
-                if (crouchDeepSprite != null) spriteRenderer.sprite = crouchDeepSprite;
-                spriteRenderer.flipX = false;
-            }
-            else
-            {
-                if (crouchSprite != null) spriteRenderer.sprite = crouchSprite;
-                spriteRenderer.flipX = isRight;
-            }
-            yield return new WaitForSeconds(0.05f);
-
-            // Apply physical jump velocity now that the crouch is complete!
-            rb.linearVelocity = new Vector2(rb.linearVelocity.x, jumpForce);
-            ApplySquashAndStretch(0.8f, 1.25f);
-            FXManager.Instance?.EmitJumpDust(transform.position + Vector3.down * 0.28f, Vector2.down);
-            AudioManager.Instance?.PlayJump();
-
-            // Frame 3: Takeoff
+            // Frame 1: Immediate Takeoff (physics impulse was already applied in Jump())
             if (isVertical)
             {
                 if (launchSprite != null) spriteRenderer.sprite = launchSprite;
-                spriteRenderer.flipX = false;
             }
             else
             {
                 if (takeoffSprite != null) spriteRenderer.sprite = takeoffSprite;
-                spriteRenderer.flipX = isRight;
             }
-            yield return new WaitForSeconds(0.05f);
+            spriteRenderer.flipX = isRight;
+            yield return Wait005;
 
-            // Frame 4: Rise 1
+            // Frame 2: Rise 1
             if (isVertical)
             {
                 if (rise1Sprite != null) spriteRenderer.sprite = rise1Sprite;
-                spriteRenderer.flipX = false;
             }
             else
             {
                 if (jumpSprite != null) spriteRenderer.sprite = jumpSprite;
-                spriteRenderer.flipX = isRight;
             }
-            yield return new WaitForSeconds(0.05f);
+            spriteRenderer.flipX = isRight;
+            yield return Wait005;
 
-            // Frame 5: Rise 2
+            // Frame 3: Rise 2
             if (isVertical)
             {
                 if (rise2Sprite != null) spriteRenderer.sprite = rise2Sprite;
-                spriteRenderer.flipX = false;
             }
             else
             {
                 if (jumpSprite != null) spriteRenderer.sprite = jumpSprite;
-                spriteRenderer.flipX = isRight;
             }
-            yield return new WaitForSeconds(0.05f);
+            spriteRenderer.flipX = isRight;
+            yield return Wait005;
 
             jumpTransitionCoroutine = null;
             // Let the standard state machine in LateUpdate take over
@@ -1276,32 +1819,31 @@ namespace MyProject
         private System.Collections.IEnumerator AnimateLandingTransition(bool isVertical)
         {
             currentVisualState = CatState.LandingTransition;
+            bool isRight = facingDirectionX > 0f;
 
-            // Frame 1: Crouch 2 (deep impact cushion)
-            if (isVertical)
+            // Frame 1: Deep impact cushion
+            if (crouchDeepSprite != null)
             {
-                if (crouchDeepSprite != null) spriteRenderer.sprite = crouchDeepSprite;
-                spriteRenderer.flipX = false;
+                spriteRenderer.sprite = crouchDeepSprite;
             }
-            else
+            else if (crouchSprite != null)
             {
-                if (crouchSprite != null) spriteRenderer.sprite = crouchSprite;
-                spriteRenderer.flipX = facingDirectionX > 0f;
+                spriteRenderer.sprite = crouchSprite;
             }
-            yield return new WaitForSeconds(0.06f);
+            spriteRenderer.flipX = isRight;
+            yield return Wait006;
 
-            // Frame 2: Crouch 1 (recovering)
-            if (isVertical)
+            // Frame 2: Mid-crouch recovery
+            if (crouchSprite != null)
             {
-                if (idleSprite != null) spriteRenderer.sprite = idleSprite;
-                spriteRenderer.flipX = false;
+                spriteRenderer.sprite = crouchSprite;
             }
-            else
+            else if (idleSprite != null)
             {
-                if (crouchSprite != null) spriteRenderer.sprite = crouchSprite;
-                spriteRenderer.flipX = facingDirectionX > 0f;
+                spriteRenderer.sprite = idleSprite;
             }
-            yield return new WaitForSeconds(0.06f);
+            spriteRenderer.flipX = isRight;
+            yield return Wait006;
 
             landingTransitionCoroutine = null;
             // Let the standard state machine take over in the next frames
@@ -1315,22 +1857,22 @@ namespace MyProject
             // Frame 1
             if (attackSprite1 != null) spriteRenderer.sprite = attackSprite1;
             spriteRenderer.flipX = facingDirectionX > 0f;
-            yield return new WaitForSeconds(0.05f);
+            yield return Wait005;
 
             // Frame 2
             if (attackSprite2 != null) spriteRenderer.sprite = attackSprite2;
             spriteRenderer.flipX = facingDirectionX > 0f;
-            yield return new WaitForSeconds(0.05f);
+            yield return Wait005;
 
             // Frame 3
             if (attackSprite3 != null) spriteRenderer.sprite = attackSprite3;
             spriteRenderer.flipX = facingDirectionX > 0f;
-            yield return new WaitForSeconds(0.05f);
+            yield return Wait005;
 
             // Frame 4
             if (attackSprite4 != null) spriteRenderer.sprite = attackSprite4;
             spriteRenderer.flipX = facingDirectionX > 0f;
-            yield return new WaitForSeconds(0.05f);
+            yield return Wait005;
 
             attackCoroutine = null;
         }
@@ -1357,6 +1899,7 @@ namespace MyProject
             {
                 case CatState.Idle:
                     if (idleSprite != null) spriteRenderer.sprite = idleSprite;
+                    spriteRenderer.flipX = facingDirectionX > 0f;
                     break;
                 case CatState.GoingLeft:
                     spriteRenderer.sprite = GetWalkingSpriteForFrame(animationFrameIndex);
@@ -1369,6 +1912,7 @@ namespace MyProject
                 case CatState.VerticalJump:
                     if (rise2Sprite != null) spriteRenderer.sprite = rise2Sprite;
                     else if (verticalJumpSprite != null) spriteRenderer.sprite = verticalJumpSprite;
+                    spriteRenderer.flipX = facingDirectionX > 0f;
                     break;
                 case CatState.JumpingLeft:
                     if (jumpSprite != null) spriteRenderer.sprite = jumpSprite;

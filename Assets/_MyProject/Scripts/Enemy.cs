@@ -10,7 +10,9 @@ namespace MyProject
 
             int defeated = PlayerPrefs.GetInt("CatClimb_DefeatedEnemies", 0);
             PlayerPrefs.SetInt("CatClimb_DefeatedEnemies", defeated + 1);
-            PlayerPrefs.Save();
+
+            GameManager.Instance?.RecordMouseDefeated();
+            Haptics.Medium();
 
             // Deactivate the enemy GameObject to recycle it back into the PlatformManager's pool
             gameObject.SetActive(false);

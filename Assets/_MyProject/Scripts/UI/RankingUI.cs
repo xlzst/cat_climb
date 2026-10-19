@@ -73,7 +73,7 @@ namespace MyProject.UI
 
         public void RefreshUI()
         {
-            int userHighScore = GameManager.Instance != null ? GameManager.Instance.HighScore : PlayerPrefs.GetInt(GameManager.HIGH_SCORE_KEY, 0);
+            int userHighScore = GameManager.Instance != null ? GameManager.Instance.BestMeters : PlayerPrefs.GetInt(GameManager.BEST_METERS_KEY, 0);
 
             // Construct leaderboard list including user
             List<RankingEntry> leaderboard = new List<RankingEntry>(baseBots);
@@ -88,7 +88,7 @@ namespace MyProject.UI
 
             if (userRankText != null)
             {
-                userRankText.text = $"YOUR RANK: #{userRank}  (BEST: {userHighScore} FT)";
+                userRankText.text = $"YOUR RANK: #{userRank}  (BEST: {userHighScore}m)";
             }
 
             int cardCount = rankNumTexts.Count;
@@ -103,17 +103,17 @@ namespace MyProject.UI
                     {
                         if (rankPos == 1)
                         {
-                            rankNumTexts[i].text = "#1 🥇";
+                            rankNumTexts[i].text = "1st";
                             rankNumTexts[i].color = new Color(1f, 0.85f, 0.2f, 1f);
                         }
                         else if (rankPos == 2)
                         {
-                            rankNumTexts[i].text = "#2 🥈";
+                            rankNumTexts[i].text = "2nd";
                             rankNumTexts[i].color = new Color(0.85f, 0.88f, 0.92f, 1f);
                         }
                         else if (rankPos == 3)
                         {
-                            rankNumTexts[i].text = "#3 🥉";
+                            rankNumTexts[i].text = "3rd";
                             rankNumTexts[i].color = new Color(0.9f, 0.55f, 0.35f, 1f);
                         }
                         else
@@ -131,7 +131,7 @@ namespace MyProject.UI
 
                     if (scoreTexts[i] != null)
                     {
-                        scoreTexts[i].text = $"{entry.score} FT";
+                        scoreTexts[i].text = $"{entry.score}m";
                         scoreTexts[i].color = entry.isUser ? new Color(0.3f, 0.95f, 0.8f, 1f) : new Color(0.8f, 0.85f, 0.9f, 1f);
                     }
 

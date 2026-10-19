@@ -19,6 +19,7 @@ namespace MyProject
         private float initialY;
         private int moveDirection = 1; // 1 = Up, -1 = Down
         private BoxCollider2D boxCollider;
+        private static readonly Collider2D[] overlapBuffer = new Collider2D[12];
 
         public bool IsMoving => isMoving;
         public int ShapeChoice => shapeChoice;
@@ -28,7 +29,7 @@ namespace MyProject
             boxCollider = GetComponent<BoxCollider2D>();
         }
 
-        public void ConfigureMovement(int shape, bool shouldMove)
+        public void ConfigureMovement(int shape, bool shouldMove, float speedMultiplier = 1f)
         {
             shapeChoice = shape;
             initialY = transform.position.y;
@@ -42,7 +43,7 @@ namespace MyProject
             else
             {
                 isMoving = shouldMove;
-                moveSpeed = Random.Range(1.3f, 2.0f);
+                moveSpeed = Random.Range(1.3f, 2.0f) * Mathf.Clamp(speedMultiplier, 0.5f, 2.2f);
             }
         }
 
@@ -66,20 +67,6 @@ namespace MyProject
             if (GameManager.Instance != null && GameManager.Instance.CurrentState != GameState.Playing)
             {
                 return;
-            }
-
-            // Check if player has reached score threshold (100 for testing, 3000 production)
-            int targetScore = PlatformManager.Instance != null ? PlatformManager.Instance.movingPlatformScoreThreshold : 100;
-            float targetHeight = targetScore / 10f;
-            bool scoreReached = (GameManager.Instance != null && GameManager.Instance.CurrentScore >= targetScore) || transform.position.y >= targetHeight;
-
-            // Enable movement for square or horizontal platforms when score threshold reached
-            if (scoreReached && (shapeChoice == 0 || shapeChoice == 2))
-            {
-                if (!isMoving)
-                {
-                    SetMoving(true);
-                }
             }
 
             if (!isMoving) return;
@@ -147,10 +134,11 @@ namespace MyProject
                 checkSize = new Vector2(b.size.x * 0.95f, checkDist);
             }
 
-            Collider2D[] hits = Physics2D.OverlapBoxAll(checkCenter, checkSize, 0f);
-            for (int i = 0; i < hits.Length; i++)
+            int hitCount = Physics2D.OverlapBox(checkCenter, checkSize, 0f, ContactFilter2D.noFilter, overlapBuffer);
+            for (int i = 0; i < hitCount; i++)
             {
-                Collider2D hit = hits[i];
+                Collider2D hit = overlapBuffer[i];
+                overlapBuffer[i] = null;
                 if (hit == null || hit == boxCollider || hit.transform.IsChildOf(transform)) continue;
 
                 // Ignore player and triggers
@@ -188,14 +176,20 @@ namespace MyProject
                 Vector2 checkCenter = new Vector2(bounds.center.x, bounds.max.y + 0.1f);
                 Vector2 checkSize = new Vector2(bounds.size.x * 0.9f, 0.2f);
 
-                Collider2D[] hits = Physics2D.OverlapBoxAll(checkCenter, checkSize, 0f);
-                for (int i = 0; i < hits.Length; i++)
+                int hitCount = Physics2D.OverlapBox(checkCenter, checkSize, 0f, ContactFilter2D.noFilter, overlapBuffer);
+                bool carried = false;
+                for (int i = 0; i < hitCount; i++)
                 {
-                    PlayerController pc = hits[i].GetComponentInParent<PlayerController>();
-                    if (pc != null)
+                    Collider2D hit = overlapBuffer[i];
+                    overlapBuffer[i] = null;
+                    if (!carried && hit != null)
                     {
-                        pc.transform.position += new Vector3(0f, deltaY, 0f);
-                        break;
+                        PlayerController pc = hit.GetComponentInParent<PlayerController>();
+                        if (pc != null)
+                        {
+                            pc.transform.position += new Vector3(0f, deltaY, 0f);
+                            carried = true;
+                        }
                     }
                 }
             }

@@ -572,3 +572,192 @@
     - Added dynamic safety check against `WallManager.Instance.IsSpikeNear(...)` in `WillOverlapOtherPlatform`, preventing moving platforms from oscillating into active wall spikes.
   - **Build Verification**:
     - Verified compilation with 0 errors and 0 warnings on both `Assembly-CSharp.csproj` and `Assembly-CSharp-Editor.csproj`.
+
+## [2026-10-15] Implement Phase 6 & Phase 7: Mobile Basics, Game Feel Polish, Meters Score, FTUE Tutorial & GameOver Rework
+- Successfully implemented and verified **Phase 6** (Mobile Basics & Tactile Polish) and **Phase 7** (Progression, Clarity & Retention) according to the user-approved enhancement roadmap:
+  - **Mobile Foundation & Lifecycle ([AppBootstrap.cs](file:///Users/minwookang/cat_climb/Assets/_MyProject/Scripts/AppBootstrap.cs))**:
+    - Created `[RuntimeInitializeOnLoadMethod(BeforeSceneLoad)]` bootstrap that locks `Application.targetFrameRate = 60`, `QualitySettings.vSyncCount = 0`, enforces Portrait orientation, disables landscape autorotation, and sets `SleepTimeout.NeverSleep`.
+    - Auto-pause active runs on Android/iOS app pause (`OnApplicationPause`, `OnApplicationFocus`) and safely flushes pending save data to disk in [GameManager.cs](file:///Users/minwookang/cat_climb/Assets/_MyProject/Scripts/GameManager.cs).
+    - Batched disk writes via `FlushSave()`, eliminating runtime frame spikes previously caused by `PlayerPrefs.Save()` calls on every coin pickup.
+  - **Haptic Tactile Engine ([Haptics.cs](file:///Users/minwookang/cat_climb/Assets/_MyProject/Scripts/Haptics.cs))**:
+    - Created Android JNI `Vibrator` / `VibrationEffect` engine supporting `Light` (12ms), `Medium` (28ms), `Heavy` (45ms), and `DoublePulse` (celebration fanfare), with safe fallbacks and persistent settings toggle (`CatClimb_Haptics`).
+    - Hooked tactile pulses into jump launches, wall kicks, combat impacts, combo streaks, personal best breakthroughs, and game over fanfare.
+  - **Player Physics & Input Polish ([PlayerController.cs](file:///Users/minwookang/cat_climb/Assets/_MyProject/Scripts/PlayerController.cs))**:
+    - **Fixed Procedural Scale Stagnation**: Removed permanent `LateUpdate` scale reset override `(0.5, 0.5, 1)` that previously suffocated procedural squash & stretch animations; dynamic squash and stretch now organically springs back via framerate-independent `Lerp` in `Update`.
+    - **Instant Jump Response**: Eliminated pre-jump crouch animation delay by applying physics velocity immediately on the input frame while transitioning directly into takeoff/rise frames.
+    - **Input Forgiveness**: Implemented ledge coyote time (`0.1s`), pre-landing jump buffering (`0.12s`), wall-kick grace window (`0.1s`), and wall-kick lateral momentum lock (`0.22s`) so steering inputs no longer abruptly kill wall-kick arc trajectory.
+    - **Combo Rework**: Shifted combo counter from raw jump spam to consecutive landings on new, higher platforms (`comboMinHeightGain = 0.6f`). Rewards fish treats (+1/+2/+3/+5) on milestones (3x, 5x, 8x, 12x).
+    - **Zero-GC Touch Checks**: Cached `PointerEventData` & `RaycastResult` lists, replacing per-frame allocations during drag steering.
+    - **Tilt Steering Toggled Off by Default**: Prevents unexpected horizontal drifting on devices without active gyro calibration.
+  - **Unified Score Metric (Option A: Height in Meters)**:
+    - Unified score across the entire game into physical climbing height in meters (`1 unit = 1m`).
+    - Handled legacy migration in [GameManager.cs](file:///Users/minwookang/cat_climb/Assets/_MyProject/Scripts/GameManager.cs) `Awake()` (`CatClimb_BestMeters`), maintaining legacy points key for backwards compatibility.
+    - Synchronized HUD ([GameplayHUDUI.cs](file:///Users/minwookang/cat_climb/Assets/_MyProject/Scripts/UI/GameplayHUDUI.cs)), Main Menu ([MainMenuUI.cs](file:///Users/minwookang/cat_climb/Assets/_MyProject/Scripts/UI/MainMenuUI.cs)), Shop ([ShopUI.cs](file:///Users/minwookang/cat_climb/Assets/_MyProject/Scripts/UI/ShopUI.cs)), Missions ([MissionUI.cs](file:///Users/minwookang/cat_climb/Assets/_MyProject/Scripts/UI/MissionUI.cs)), and Game Over screen ([GameOverUI.cs](file:///Users/minwookang/cat_climb/Assets/_MyProject/Scripts/UI/GameOverUI.cs)) to display clean, unified meters (`124m`, `BEST: 210m`).
+  - **Notch & Safe Area Support ([SafeAreaFitter.cs](file:///Users/minwookang/cat_climb/Assets/_MyProject/Scripts/UI/SafeAreaFitter.cs))**:
+    - Created dynamic safe area fitter that conforms UI Canvas bounds to `Screen.safeArea`, guaranteeing HUD buttons and badges are never obscured by camera cutouts or Android gesture bars.
+  - **Dynamic In-World Best Record Marker ([BestHeightMarker.cs](file:///Users/minwookang/cat_climb/Assets/_MyProject/Scripts/BestHeightMarker.cs))**:
+    - Generates a golden dashed record line and world label (`BEST: 120m`) at the player's personal best altitude.
+    - When surpassed, triggers screen trauma shake, double haptic pulse, golden starburst sparkle, celebratory toast, and a smooth fade-out.
+  - **Contextual First-Time User Experience Tutorial ([TutorialUI.cs](file:///Users/minwookang/cat_climb/Assets/_MyProject/Scripts/UI/TutorialUI.cs), [WallManager.cs](file:///Users/minwookang/cat_climb/Assets/_MyProject/Scripts/WallManager.cs))**:
+    - Implemented a 3-step contextual FTUE overlay: Drag to Steer -> Touch Wall to Climb -> Tap to Wall-Kick -> Success!
+    - Suppressed lethal wall spikes during the first 15 meters of the tutorial run to ensure a forgiving, rewarding learning curve for first-time players.
+  - **Revamped Game Over & Quick Retry Flow ([GameOverUI.cs](file:///Users/minwookang/cat_climb/Assets/_MyProject/Scripts/UI/GameOverUI.cs))**:
+    - Animated slot-machine style meters count-up (`0m -> 124m`).
+    - Celebratory record banner ("★ NEW BEST RECORD! ★" or "Only Xm from your best!").
+    - Run summary statistics card (Fish Earned, Max Combo, Wall Kicks, Mice Defeated).
+    - 1-tap "TRY AGAIN" quick restart button (`AutoStartNextRun`) and "MENU" button.
+  - **Safe Revive Platform Detection ([PlatformManager.cs](file:///Users/minwookang/cat_climb/Assets/_MyProject/Scripts/PlatformManager.cs))**:
+    - Added `TryGetSafeRespawnPoint` to position revived players strictly on stable, non-fragile, spike-clear, enemy-free platforms.
+  - **Batchmode Scene Setup & Build Verification**:
+    - Updated [SceneSetup.cs](file:///Users/minwookang/cat_climb/Assets/_MyProject/Scripts/Editor/SceneSetup.cs) to generate and wire all new systems.
+    - Verified compilation with 0 errors and 0 warnings on both `Assembly-CSharp.csproj` and `Assembly-CSharp-Editor.csproj`.
+    - Executed Unity batchmode scene regeneration (`CreateGameplaySceneForce`) with exit code 0.
+
+## [2026-10-16] Fix Game Over Action Button Layout & Menu Button Styling
+- Resolved issue where the Main Menu button popped up in an awkward, crooked position overlapping the retry button with poor visual styling:
+  - **Root Cause**: [GameOverUI.cs](file:///Users/minwookang/cat_climb/Assets/_MyProject/Scripts/UI/GameOverUI.cs) had a runtime fallback that positioned the Home button at an arbitrary horizontal offset (`restartX - restartWidth * 0.28f`) and vertical offset (`restartY - 70f`), causing it to overlap the bottom-left corner of the `RestartButton` with an unstyled gray box (`#3D4761`) and cramped text.
+  - **Symmetric Mobile Portrait Layout & Hierarchy**:
+    - **Primary Action (TRY AGAIN)**: Centered at `anchor (0.5, 0.21)` with dimensions `460 x 96px`, styled in vibrant Coral Rose (`#FF616B`) with 34pt bold white text. Added a juicy subtle pulse animation (`pulseRestartButton`) for clear visual feedback.
+    - **Secondary Action (MAIN MENU)**: Centered directly below at `anchor (0.5, 0.11)` with dimensions `360 x 76px`, styled in sleek Midnight Indigo (`#333D5C`) with 24pt bold soft-white text (`#EBF2FF`). Leaves a generous 106px spacing between buttons to prevent accidental taps.
+    - **Rebalanced Element Anchors**: Unified vertical rhythm across the Game Over screen (`CelebrationBanner` at 0.77, `GameOverTitle` at 0.69, `FinalScoreText` at 0.57, `FishEarnedText` at 0.47, `HighScoreText` at 0.41, and `RunStatsText` at 0.33).
+  - **SceneSetup Integration**:
+    - Updated [SceneSetup.cs](file:///Users/minwookang/cat_climb/Assets/_MyProject/Scripts/Editor/SceneSetup.cs) to explicitly construct and serialize both `RestartButton` and `HomeButton` in the scene hierarchy with full references wired.
+  - **Build Verification**:
+    - Verified compilation with 0 errors and 0 warnings on both `Assembly-CSharp.csproj` and `Assembly-CSharp-Editor.csproj`.
+
+## [2026-10-16] Fix Undefined Tag 'Platform' Runtime UnityException
+- Resolved `UnityException: Tag: Platform is not defined` triggered in `PlatformManager.IsPlatform`:
+  - **Root Cause**: [PlatformManager.cs](file:///Users/minwookang/cat_climb/Assets/_MyProject/Scripts/PlatformManager.cs) called `go.CompareTag("Platform")`. In Unity, `CompareTag` throws a fatal runtime exception if the tag has not been manually defined in `TagManager.asset`.
+  - **Zero-Allocation Robust Platform Detection**:
+    - Replaced the tag check with pool equality checking, child hierarchy check (`IsChildOf`), component inspection (`MovingPlatform`, `FragilePlatform` directly and in parent), and fallback name matching (`go.name.Contains("Platform")`).
+  - **Build Verification**:
+    - Verified compilation with 0 errors and 0 warnings on both `Assembly-CSharp.csproj` and `Assembly-CSharp-Editor.csproj`.
+
+
+
+## [2026-10-17] Midway Codebase Audit & Optimization Pass (Post-Phase 7)
+- **Completed Work**:
+  - **1. Resume / Revive Altitude Preservation (`Assets/_MyProject/Scripts/GameManager.cs`)**:
+    - Fixed a bug where `SetState(GameState.Playing)` overwrote `initialPlayerY = player.transform.position.y` whenever resuming from `Paused` or `Revive`, which reset `heightDiff` mid-run. `initialPlayerY` is now captured only on initial scene start and inside `StartGame()`.
+  - **2. Unified Meters (`m`) & `BestMeters` Across Remaining UI Panels (`Assets/_MyProject/Scripts/UI/ShopUI.cs`, `RankingUI.cs`, `Editor/SceneSetup.cs`)**:
+    - Replaced leftover `FT` labels and `HIGH_SCORE_KEY` fallbacks in `ShopUI` (`BEST: {currentHighScore}m`, `${skin.coinPrice} FISH / {skin.unlockScore}m`) and `RankingUI` (`YOUR RANK: #{userRank} (BEST: {userHighScore}m)`, `${entry.score}m`) with `BestMeters` / `BEST_METERS_KEY`.
+  - **3. Zero-Allocation Moving Platform Physics & Balanced Spawn Threshold (`Assets/_MyProject/Scripts/MovingPlatform.cs`, `PlatformManager.cs`)**:
+    - Replaced per-frame `Physics2D.OverlapBoxAll` calls in `MovingPlatform.WillOverlapOtherPlatform` and `MovePlatform` with a pre-allocated static `Collider2D[12]` buffer (`Physics2D.OverlapBox`), eliminating per-frame GC allocations across moving platforms.
+    - Updated `movingPlatformScoreThreshold` from `100` (legacy points) to `20` (meters) with a `35%` `movingPlatformChance` on eligible platforms above 20m, and removed the global override in `MovingPlatform.Update()` that forced 100% of square/horizontal platforms to start moving simultaneously.
+  - **4. Event Lifecycle, Haptics & Orientation Polish (`Assets/_MyProject/Scripts/BiomeManager.cs`, `FishTreat.cs`, `Haptics.cs`, `AppBootstrap.cs`, `UI/TutorialUI.cs`)**:
+    - Unsubscribed `GameManager.Instance.OnGameStateChanged` in `BiomeManager.OnDestroy()` and switched biome toast notifications to `UIManager.Instance?.ShowToast(...)`.
+    - Added `Haptics.Light()` on coin pickup in `FishTreat.Collect()` and cached `DoublePulsePattern` in `Haptics.cs` for zero-GC haptic waveforms.
+    - Disabled `autorotateToPortraitUpsideDown` in `AppBootstrap.cs` and `SceneSetup.cs` to prevent upside-down screen flips on mobile.
+    - Cached `Rigidbody2D` reference in `TutorialUI.cs` instead of calling `GetComponent<Rigidbody2D>()` every frame during the tutorial.
+  - **5. Build Verification**:
+    - Verified both `Assembly-CSharp.csproj` and `Assembly-CSharp-Editor.csproj` compile with **0 warnings and 0 errors**.
+
+## [2026-10-17] Implement Phase 8: Difficulty Curve & Retention Meta
+- **Completed Work**:
+  - **1. Dynamic Altitude Difficulty Pacing ([DifficultyDirector.cs](file:///Users/minwookang/cat_climb/Assets/_MyProject/Scripts/DifficultyDirector.cs))**:
+    - Created `DifficultyDirector` singleton evaluating smooth `AnimationCurve` profiles across `0m -> 300m+` altitude:
+      - Platform vertical spacing scales smoothly from `1.2m–2.1m` (`0m`) up to `1.85m–3.1m` (`300m+`).
+      - Enemy mouse spawn probability scales from `5%` (`0m`) up to `24%` (`300m+`).
+      - Fragile platform probability scales from `8%` (`0m`) up to `38%` (`300m+`).
+      - Moving platform spawn chance (`0%` below `20m`, `25%` at `20m`, scaling to `55%` at `300m+`) and movement speed multiplier (`1.0x -> 1.85x`).
+      - Wall spike density per 10m wall segment scales progressively (`1` spike `<35m`, `2` spikes `35–120m`, `3` spikes `120–240m`, `4` spikes `240m+`) alongside per-slot activation probability (`45% -> 88%`).
+    - Integrated `DifficultyDirector` into [PlatformManager.cs](file:///Users/minwookang/cat_climb/Assets/_MyProject/Scripts/PlatformManager.cs), [MovingPlatform.cs](file:///Users/minwookang/cat_climb/Assets/_MyProject/Scripts/MovingPlatform.cs), [WallManager.cs](file:///Users/minwookang/cat_climb/Assets/_MyProject/Scripts/WallManager.cs) (upgraded pool to 4 spikes per wall segment), [GameManager.cs](file:///Users/minwookang/cat_climb/Assets/_MyProject/Scripts/GameManager.cs), and [SceneSetup.cs](file:///Users/minwookang/cat_climb/Assets/_MyProject/Scripts/Editor/SceneSetup.cs).
+  - **2. Consolidated Save Architecture & Daily Reset ([SaveData.cs](file:///Users/minwookang/cat_climb/Assets/_MyProject/Scripts/SaveData.cs))**:
+    - Created JSON-backed `SaveData` manager (`CatClimb_Save_v1` in `PlayerPrefs`) with automatic backwards-compatible migration from legacy `PlayerPrefs` keys (`CatClimb_BestMeters`, `CatClimb_Coins`, unlocked skins, lifetime runs, enemies defeated).
+    - Tracks daily mission counters (`dailyBestMeters`, `dailyRunsPlayed`, `dailyEnemiesDefeated`, `dailyFishCollected`, `dailyMaxFishSingleRun`, `dailyWallKicks`, `dailyMaxCombo`) with automatic local-midnight reset (`yyyyMMdd`) and batched dirty-flag `Flush()`.
+    - Wired into [GameManager.cs](file:///Users/minwookang/cat_climb/Assets/_MyProject/Scripts/GameManager.cs) (`Awake`, `TriggerGameOver`, `FlushSave`).
+  - **3. Rotating Daily Missions & Claimable Notification Badges ([MissionUI.cs](file:///Users/minwookang/cat_climb/Assets/_MyProject/Scripts/UI/MissionUI.cs), [MainMenuUI.cs](file:///Users/minwookang/cat_climb/Assets/_MyProject/Scripts/UI/MainMenuUI.cs), [GameOverUI.cs](file:///Users/minwookang/cat_climb/Assets/_MyProject/Scripts/UI/GameOverUI.cs))**:
+    - Expanded `MissionUI` to a 12-template rotating pool across 7 `MissionType`s (`ReachHeight`, `PlayRuns`, `DefeatEnemies`, `CollectFishSingleRun`, `CollectFishDaily`, `WallKicksDaily`, `ReachCombo`), deterministically selecting 5 diverse daily missions per calendar day (`yyyyMMdd`).
+    - Added live daily reset countdown timer (`COMPLETED: X/5 | RESETS IN HHh MMm`) and dynamic mission card binding.
+    - Added claimable mission badge alerts on the Main Menu button (`DAILY MISSIONS (N!)`) and Game Over summary (`+X FISH • N MISSION READY!`).
+  - **4. 7-Day Login Streak Modal ([DailyRewardUI.cs](file:///Users/minwookang/cat_climb/Assets/_MyProject/Scripts/UI/DailyRewardUI.cs), [UIManager.cs](file:///Users/minwookang/cat_climb/Assets/_MyProject/Scripts/UI/UIManager.cs))**:
+    - Created self-healing `DailyRewardUI` popup with 7 escalating daily login rewards (`+25`, `+40`, `+60`, `+80`, `+100`, `+150`, `+250` Fish Treats on Day 7).
+    - Automatically displays once per local calendar day upon entering the Main Menu.
+  - **5. Build Verification**:
+    - Verified both `Assembly-CSharp.csproj` and `Assembly-CSharp-Editor.csproj` compile cleanly with **0 warnings and 0 errors**.
+
+## [2026-10-17] Implement Phase 9: Biome Chiptune BGM, Settings Modal & Cosmetics Polish (Hats, Trails, Button Feedback)
+- **Completed Work**:
+  - **1. Synthesized Biome Chiptune BGM & Crossfade Audio Engine ([AudioManager.cs](file:///Users/minwookang/cat_climb/Assets/_MyProject/Scripts/AudioManager.cs), [BiomeManager.cs](file:///Users/minwookang/cat_climb/Assets/_MyProject/Scripts/BiomeManager.cs))**:
+    - Synthesized 4 looping 16-bit chiptune BGM tracks in `Assets/_MyProject/Audio/`:
+      - `bgm_alley.wav`: Alley Dawn (`0m`, 132 BPM upbeat major-key bounce).
+      - `bgm_rooftops.wav`: Rooftops Sunset (`50m`, 140 BPM sunset synth groove).
+      - `bgm_stratosphere.wav`: Stratosphere (`150m`, 150 BPM soaring arpeggio).
+      - `bgm_space.wav`: Deep Space (`300m+`, 156 BPM cosmic starlight melody).
+    - Upgraded `AudioManager` with dual looping music channels (`musicSourceA`, `musicSourceB`) for smooth `1.1s` crossfades on biome transitions (`PlayBiomeMusic`), plus runtime procedural loop fallbacks (`EnsureRuntimeBGMFallbacks`).
+    - Added automatic music ducking and pitch modulation during `Paused`, `Revive`, and `GameOver` states, and separated `IsMusicEnabled` / `MusicVolume` from `IsAudioEnabled` (SFX) / `SFXVolume`.
+  - **2. Full Settings Modal ([SettingsUI.cs](file:///Users/minwookang/cat_climb/Assets/_MyProject/Scripts/UI/SettingsUI.cs), [MainMenuUI.cs](file:///Users/minwookang/cat_climb/Assets/_MyProject/Scripts/UI/MainMenuUI.cs), [PauseUI.cs](file:///Users/minwookang/cat_climb/Assets/_MyProject/Scripts/UI/PauseUI.cs))**:
+    - Created self-healing `SettingsUI` modal accessible from both the Main Menu (`SETTINGS` top-right button) and the mid-run Pause Menu (`PauseSettingsButton`).
+    - Includes live toggles and step controls for **BGM Music** (`ON/OFF` + `25%/50%/75%/100%` volume), **Sound FX** (`ON/OFF` + `25%/50%/75%/100%` volume), **Vibration / Haptics** (`Haptics.IsEnabled`), **Tilt Steering / Gyro** (`PlayerController.SetTiltControlEnabled`), **Replay Tutorial** (`TutorialUI.TUTORIAL_PREF_KEY`), and studio credits.
+  - **3. Expanded Cosmetics: Hats, Trails & Tabbed Shop ([ShopUI.cs](file:///Users/minwookang/cat_climb/Assets/_MyProject/Scripts/UI/ShopUI.cs), [PlayerController.cs](file:///Users/minwookang/cat_climb/Assets/_MyProject/Scripts/PlayerController.cs))**:
+    - Generated 4 128x128 pixel-art hat sprites in `Assets/_MyProject/Sprites/`: `HatCrown.png` (Royal Gold Crown), `HatNinjaBand.png` (Shinobi Headband), `HatParty.png` (Party Cone Hat), and `HatAstro.png` (Space Cat Visor).
+    - Added child `CatHatVisual` (`SpriteRenderer` synced with `flipX`) and `CatTrailVisual` (`TrailRenderer` supporting Sakura Petal, Golden Starlight, and Cyber Neon trails) in `PlayerController.ApplySelectedSkin()`.
+    - Upgraded `ShopUI` with 3 interactive category tabs (`FUR SKINS`, `HATS`, `TRAILS`), pixel-art hat icon previews, and a live `EQUIPPED` loadout summary header.
+  - **4. Universal Tactile Button Feedback & Panel Transitions ([ButtonPressFeedback.cs](file:///Users/minwookang/cat_climb/Assets/_MyProject/Scripts/UI/ButtonPressFeedback.cs), [UIManager.cs](file:///Users/minwookang/cat_climb/Assets/_MyProject/Scripts/UI/UIManager.cs), [SceneSetup.cs](file:///Users/minwookang/cat_climb/Assets/_MyProject/Scripts/Editor/SceneSetup.cs))**:
+    - Created `ButtonPressFeedback` (`0.92x` unscaled press-down scale + light haptic pulse) and auto-attached it to all Canvas buttons via `UIManager.EnsureButtonPressFeedback()`.
+    - Added smooth `0.15s` unscaled cubic-ease-out panel scale-in transitions (`AnimatePanelOpen`) when opening Shop, Missions, Leaderboard, and Pause screens.
+  - **5. Build Verification**:
+    - Verified both `Assembly-CSharp.csproj` and `Assembly-CSharp-Editor.csproj` compile cleanly with **0 warnings and 0 errors**.
+
+## [2026-10-17] Regenerate & Harmonize 16-Bit Pixel-Art Sprites Across All Animations, Items, Hazards, and Hats
+- **Completed Work**:
+  - **1. Root-Cause Audit of Existing Sprites (`Assets/_MyProject/Sprites/`)**:
+    - Identified and resolved visual inconsistencies across the existing 21 cat animation frames where half used a side-profile model and half used a front-facing white-chested model, causing jarring head/body morphing during jumps, turns, and landings.
+    - Identified duplicate/static frames (`pixel_cat_walk_2.png` and `pixel_cat_walk_4.png` were identical; `pixel_cat_climb.png`..`4.png` had minimal limb displacement; `pixel_cat_crouch_deep.png` had a stray floating pixel artifact).
+    - Identified low-detail environment/cosmetic placeholders (`WallSpike.png` had a solid white block base, `GroundDirtOnly.png` had a green grass seam across its center, and `HatCrown.png`, `HatNinjaBand.png`, `HatParty.png`, and `HatAstro.png` were 16x16 procedural blocks).
+  - **2. Cohesive 16-Bit Pixel-Art Sprite Sheet Generation & Precision Slicing**:
+    - Generated cohesive 16-bit SNES/GBA pixel-art master sheets sharing a unified character design bible (warm orange `#F58B32` fur, `#C85216` tabby stripes, `#FCE5B8` cream muzzle/chest/paws, crisp dark 1px outlines) and extracted them onto `128x128` transparent RGBA canvases while preserving all existing `.png.meta` GUIDs:
+      - **4-Frame Walk Cycle (`pixel_cat.png`, `pixel_cat_walk_2.png`, `pixel_cat_walk_3.png`, `pixel_cat_walk_4.png`)**: 4 distinct left-facing stride & passing poses aligned to paw baseline `y = 104` (`y = 103` on passing frames for natural gait bounce).
+      - **4-Frame Wall Climb Cycle (`pixel_cat_climb.png`, `pixel_cat_climb_2.png`, `pixel_cat_climb_3.png`, `pixel_cat_climb_4.png`)**: 4 distinct vertical climbing frames with clear front/hind limb alternation, oriented facing left with front clinging paws aligned to `x = 22` and `bottom_y = 116`.
+      - **Unified Jump, Crouch, Land, Idle & Turn States (`pixel_cat_idle.png`, `pixel_cat_turn.png`, `pixel_cat_crouch.png`, `pixel_cat_crouch_deep.png`, `pixel_cat_takeoff.png`, `pixel_cat_launch.png`, `pixel_cat_rise_1.png`, `pixel_cat_rise_2.png`, `pixel_cat_jump.png`, `pixel_cat_jump_up.png`, `pixel_cat_land.png`)**: Extracted from matching side-profile and 3/4-angle jump sheets, oriented left-facing by default, with grounded frames aligned to baseline `y = 104` and aerial frames centered at `(64, 64)`.
+      - **4-Frame Mid-Air Melee Attack Cycle (`pixel_cat_attack_1.png` .. `pixel_cat_attack_4.png`)**: Wind-up, fierce lunge, full golden crescent claw slash arc, and mid-air recovery, oriented left-facing and scaled cleanly within `128x128` without clipping.
+      - **Enhanced Collectibles, Hazards & Enemies (`EnemyMouse.png`, `WallSpike.png`, `FishTreat.png`, `MagnetItem.png`)**: Detailed 16-bit scurrying mouse (`bottom_y = 115`), riveted steel hazard spike with crimson warning tip flush at `y = 128`, golden taiyaki fish treat, and sparkling red horseshoe magnet.
+      - **Enhanced Cosmetic Hats (`HatCrown.png`, `HatNinjaBand.png`, `HatParty.png`, `HatAstro.png`)**: High-detail 16-bit jeweled gold crown, flowing crimson shinobi headband, polka-dot party cone hat, and glass-domed astronaut visor.
+      - **Regenerated 16-Bit Walls, Platforms & Floor (`pixel_wall_tile.png`, `GroundSprite.png`, `GroundSquare.png`, `GroundVertical.png`, `GroundDirtOnly.png`)**:
+        - `pixel_wall_tile.png` (`1024x1024`): Seamless dark slate-blue & indigo castle masonry wall texture with beveled stone highlights, deep mortar crevices, and subtle moss tufts.
+        - `GroundSprite.png` (`128x128` + updated `GroundSprite.png.meta` rect from legacy `900x260` to `128x128`): Horizontally tileable floor tile with vibrant emerald/lime grass blades overhanging layered terracotta soil and cobblestones.
+        - `GroundSquare.png` (`128x128`): Floating platform block with a lush mossy turf cap and carved terracotta-and-stone masonry framed by a crisp dark 16-bit outline.
+        - `GroundVertical.png` (`128x128`): Vertical stone pillar platform block with a mossy green top cap and stacked carved stone masonry filling the full `128x128` collider bounds.
+        - `GroundDirtOnly.png` (`128x128`): Subterranean layered earth, pebble, and cobblestone fill block.
+  - **3. Directional Consistency in Jump/Land Animation Transitions ([PlayerController.cs](file:///Users/minwookang/cat_climb/Assets/_MyProject/Scripts/PlayerController.cs))**:
+    - Updated `AnimateJumpTransition()`, `AnimateLandingTransition()`, and `ApplySpriteState()` so `Idle`, `VerticalJump`, `JumpingTransition`, and `LandingTransition` consistently preserve `spriteRenderer.flipX = facingDirectionX > 0f` and sequence `crouchDeepSprite -> crouchSprite -> idleSprite` on landing without directional snapping.
+  - **4. Build Verification**:
+    - Verified both `Assembly-CSharp.csproj` and `Assembly-CSharp-Editor.csproj` compile with **0 warnings and 0 errors**.
+
+## [2026-10-18] Generate & Integrate Dedicated Horizontally Long Platform Sprite (`GroundHorizontal.png`)
+- **Completed Work**:
+  - **1. Dedicated 5:1 Horizontal Platform Art ([GroundHorizontal.png](file:///Users/minwookang/cat_climb/Assets/_MyProject/Sprites/GroundHorizontal.png))**:
+    - Generated a dedicated 16-bit SNES/GBA pixel-art wide horizontal platform ledge designed at a `5:1` aspect ratio with a lush emerald/lime mossy turf cap and 3 courses of warm terracotta-and-stone masonry bricks with hanging ivy accents.
+    - Processed and pre-fitted the `5:1` wide ledge onto a `128x128` Single-sprite canvas (`GroundHorizontal.png` + `GroundHorizontal.png.meta`) so that when `PlatformManager` applies the `(1.5f, 0.3f, 1f)` horizontal platform scale, the pixels decompress back to their exact native `1:1` square pixel proportions without any horizontal stretching or vertical squashing, while maintaining a 1:1 `BoxCollider2D` match (`1.28 x 1.28`).
+  - **2. Runtime & Scene Builder Integration ([PlatformManager.cs](file:///Users/minwookang/cat_climb/Assets/_MyProject/Scripts/PlatformManager.cs), [SceneSetup.cs](file:///Users/minwookang/cat_climb/Assets/_MyProject/Scripts/Editor/SceneSetup.cs))**:
+    - Added `public Sprite groundHorizontalSprite` to `PlatformManager` with automatic runtime/editor fallback loading from `Assets/_MyProject/Sprites/GroundHorizontal.png`.
+    - Updated `ConfigurePlatformShape()` so `shapeChoice == 2` (Horizontally Long Rectangle) assigns `groundHorizontalSprite`.
+    - Updated `SceneSetup.cs` to import `GroundHorizontal.png` with `FilterMode.Point` and wire it to `PlatformManager.groundHorizontalSprite`.
+  - **3. Build Verification**:
+    - Verified both `Assembly-CSharp.csproj` and `Assembly-CSharp-Editor.csproj` compile with **0 warnings and 0 errors**.
+
+## [2026-10-19] Align Cat Grounded & Climbing Sprites with `CircleCollider2D` Bounds
+- **Completed Work**:
+  - **1. Root-Cause Diagnosis**:
+    - The Cat's `CircleCollider2D` has `radius = 0.25f` on the parent (`scale = 1.0`), while the `Visual` child has `localScale = (0.5f, 0.5f, 1f)` on a `128x128` (`1.28x1.28` world units) sprite canvas.
+    - In pixel space on the `128x128` canvas (centered at `(64, 64)`), `0.25` world units equals `50` sprite pixels (`0.25 / 0.5 * 100 = 50px`), meaning the physical collider's bottom tangent is at `y = 114` (`64 + 50`) and its left/right wall tangents are at `x = 14` (`64 - 50`) and `x = 114` (`64 + 50`).
+    - Previously, grounded cat frames were placed with their paws at `bottom_y = 104` (`10px` above the collider bottom) and climbing frames were placed at `left_x = 22` (`8px` away from the wall tangent), making the cat appear to float above the floor/platforms and hover off the wall while climbing.
+  - **2. Sprite Canvas Re-Alignment (`Assets/_MyProject/Sprites/`)**:
+    - Shifted all grounded cat sprites ([pixel_cat.png](file:///Users/minwookang/cat_climb/Assets/_MyProject/Sprites/pixel_cat.png), [pixel_cat_walk_2.png](file:///Users/minwookang/cat_climb/Assets/_MyProject/Sprites/pixel_cat_walk_2.png), [pixel_cat_walk_3.png](file:///Users/minwookang/cat_climb/Assets/_MyProject/Sprites/pixel_cat_walk_3.png), [pixel_cat_walk_4.png](file:///Users/minwookang/cat_climb/Assets/_MyProject/Sprites/pixel_cat_walk_4.png), [pixel_cat_idle.png](file:///Users/minwookang/cat_climb/Assets/_MyProject/Sprites/pixel_cat_idle.png), [pixel_cat_turn.png](file:///Users/minwookang/cat_climb/Assets/_MyProject/Sprites/pixel_cat_turn.png), [pixel_cat_crouch.png](file:///Users/minwookang/cat_climb/Assets/_MyProject/Sprites/pixel_cat_crouch.png), [pixel_cat_crouch_deep.png](file:///Users/minwookang/cat_climb/Assets/_MyProject/Sprites/pixel_cat_crouch_deep.png), [pixel_cat_land.png](file:///Users/minwookang/cat_climb/Assets/_MyProject/Sprites/pixel_cat_land.png), [pixel_cat_takeoff.png](file:///Users/minwookang/cat_climb/Assets/_MyProject/Sprites/pixel_cat_takeoff.png)) to `bottom_y = 121` (`120` on passing walk frames) so all 4 paws sit firmly on the grass turf of the floor and platforms.
+    - Shifted all 4 climbing cat sprites ([pixel_cat_climb.png](file:///Users/minwookang/cat_climb/Assets/_MyProject/Sprites/pixel_cat_climb.png) through [pixel_cat_climb_4.png](file:///Users/minwookang/cat_climb/Assets/_MyProject/Sprites/pixel_cat_climb_4.png)) from `left_x = 22` to `left_x = 12` so both front and hind clinging paws make direct contact with the left/right wall surfaces.
+    - Updated `CatHatVisual` local Y offset in [PlayerController.cs](file:///Users/minwookang/cat_climb/Assets/_MyProject/Scripts/PlayerController.cs) from `0.40f` to `0.25f` to stay locked to the cat's head at the new grounded baseline.
+  - **3. Build Verification**:
+    - Verified both `Assembly-CSharp.csproj` and `Assembly-CSharp-Editor.csproj` compile cleanly with **0 warnings and 0 errors**.
+
+## [2026-10-19] Fix Cosmetic Hat Sizing & Dynamic Head Tracking Across Cat States
+- **Completed Work**:
+  - **1. Root-Cause Diagnosis**:
+    - Each cosmetic hat (`HatCrown.png`, `HatNinjaBand.png`, `HatParty.png`, `HatAstro.png`) occupies ~90-108px on a `128x128` canvas so it renders crisply in the Shop UI icon preview, while the Cat's head in the `128x128` cat sprite is ~28px wide and located at `x ≈ 30..42` (facing left) or `x ≈ 86..98` (when `flipX == true`).
+    - Previously, `CatHatVisual` in [PlayerController.cs](file:///Users/minwookang/cat_climb/Assets/_MyProject/Scripts/PlayerController.cs) used `localScale = (0.85f, 0.85f, 1f)` and a fixed `localPosition = (0f, 0.25f, 0f)` at the horizontal center of the cat's body, making the hat as large as the cat's entire body and centered over the torso instead of the head.
+  - **2. Centered Hat Sprites & Dynamic Head-Tracking (`UpdateHatTransform()`)**:
+    - Centered all 4 hat sprites at `(64, 64)` on their `128x128` canvases so `hatRenderer.flipX` flips symmetrically around the hat center while keeping Shop UI previews large and sharp.
+    - Added `UpdateHatTransform()` in [PlayerController.cs](file:///Users/minwookang/cat_climb/Assets/_MyProject/Scripts/PlayerController.cs) (called in `ApplySelectedHat()` and every frame in `LateUpdate()`):
+      - Scales `CatHatVisual` to `0.30f–0.38f` (~28-34px effective width) to fit the cat's head between the ears.
+      - Tracks the exact `(headX, headY)` anchor for each animation pose (`idle`, `walk`, `crouch`, `crouch_deep`, `climb`, `takeoff`/`launch`/`rise`, `jump`, `attack`) and automatically mirrors `finalX = -finalX` whenever `spriteRenderer.flipX` is true.
+  - **3. Build Verification**:
+    - Verified both `Assembly-CSharp.csproj` and `Assembly-CSharp-Editor.csproj` compile with **0 warnings and 0 errors**.

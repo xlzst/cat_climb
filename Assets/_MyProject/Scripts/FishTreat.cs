@@ -152,6 +152,7 @@ namespace MyProject
 
             FXManager.Instance?.EmitCoinSparkle(transform.position);
             AudioManager.Instance?.PlayCoin();
+            Haptics.Light();
 
             // Deactivate and return to pool without allocations
             gameObject.SetActive(false);

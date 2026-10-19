@@ -17,10 +17,7 @@
 - Forbidden Directory: You may READ but NEVER modify `Assets/ThirdParty/` or `Packages/`.
 - Security: NEVER hard-code secrets, tokens, or API keys in the scripts.
 
-## 3. Decision
-- Always explain what you trying to do before asking for permission.
-
-## 4. Development Log
+## 3. Development Log
 - After completing a task, update `log.md`.
 - Create `log.md` if it does not exist.
 - Add a dated entry describing the completed work.

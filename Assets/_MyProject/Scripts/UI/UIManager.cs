@@ -32,6 +32,51 @@ namespace MyProject.UI
 
             EnsureInputModule();
             EnsureReviveUI();
+            EnsureTutorialUI();
+            EnsureDailyRewardUI();
+            EnsureSettingsUI();
+            EnsureButtonPressFeedback();
+        }
+
+        private void EnsureSettingsUI()
+        {
+            if (SettingsUI.Instance == null)
+            {
+                if (GetComponentInChildren<SettingsUI>(true) == null)
+                {
+                    GameObject settingsGo = new GameObject("SettingsUI");
+                    settingsGo.transform.SetParent(transform, false);
+                    settingsGo.AddComponent<SettingsUI>();
+                    Debug.Log("[UIManager] Dynamically ensured and instantiated SettingsUI on Canvas.");
+                }
+            }
+        }
+
+        private void EnsureButtonPressFeedback()
+        {
+            UnityEngine.UI.Button[] allButtons = GetComponentsInChildren<UnityEngine.UI.Button>(true);
+            for (int i = 0; i < allButtons.Length; i++)
+            {
+                UnityEngine.UI.Button btn = allButtons[i];
+                if (btn != null && btn.GetComponent<ButtonPressFeedback>() == null)
+                {
+                    btn.gameObject.AddComponent<ButtonPressFeedback>();
+                }
+            }
+        }
+
+        private void EnsureDailyRewardUI()
+        {
+            if (DailyRewardUI.Instance == null)
+            {
+                if (GetComponentInChildren<DailyRewardUI>(true) == null)
+                {
+                    GameObject rewardGo = new GameObject("DailyRewardUI");
+                    rewardGo.transform.SetParent(transform, false);
+                    rewardGo.AddComponent<DailyRewardUI>();
+                    Debug.Log("[UIManager] Dynamically ensured and instantiated DailyRewardUI on Canvas.");
+                }
+            }
         }
 
         private void EnsureReviveUI()
@@ -91,6 +136,20 @@ namespace MyProject.UI
                 reviveUI.Init(reviveGo, countdownGo.GetComponent<UnityEngine.UI.Text>(), coinReviveBtn, coinReviveBtnTxt, adReviveBtn, skipBtn);
                 reviveGo.SetActive(false);
                 Debug.Log("[UIManager] Dynamically ensured and instantiated ReviveUI on Canvas.");
+            }
+        }
+
+        private void EnsureTutorialUI()
+        {
+            if (TutorialUI.Instance == null)
+            {
+                if (GetComponentInChildren<TutorialUI>(true) == null)
+                {
+                    GameObject tutGo = new GameObject("TutorialUI");
+                    tutGo.transform.SetParent(transform, false);
+                    tutGo.AddComponent<TutorialUI>();
+                    Debug.Log("[UIManager] Dynamically ensured and instantiated TutorialUI on Canvas.");
+                }
             }
         }
 
@@ -234,6 +293,8 @@ namespace MyProject.UI
                     if (missionUI != null) missionUI.Hide();
                     if (rankingUI != null) rankingUI.Hide();
                     if (reviveUI != null) reviveUI.Hide();
+                    EnsureDailyRewardUI();
+                    DailyRewardUI.Instance?.CheckAndPromptIfAvailable();
                     break;
 
                 case GameState.Playing:
@@ -282,9 +343,24 @@ namespace MyProject.UI
                     break;
 
                 case GameState.Paused:
-                    if (pauseUI != null) pauseUI.Show();
+                    if (pauseUI != null)
+                    {
+                        pauseUI.Show();
+                        AnimatePanelOpen(pauseUI);
+                    }
                     break;
             }
+        }
+
+        public void ShowSettings()
+        {
+            EnsureSettingsUI();
+            SettingsUI.Instance?.Show();
+        }
+
+        public void HideSettings()
+        {
+            SettingsUI.Instance?.Hide();
         }
 
         public void ShowShop()
@@ -292,7 +368,11 @@ namespace MyProject.UI
             if (mainMenuUI != null) mainMenuUI.Hide();
             if (missionUI != null) missionUI.Hide();
             if (rankingUI != null) rankingUI.Hide();
-            if (shopUI != null) shopUI.Show();
+            if (shopUI != null)
+            {
+                shopUI.Show();
+                AnimatePanelOpen(shopUI);
+            }
         }
 
         public void HideShop()
@@ -306,7 +386,11 @@ namespace MyProject.UI
             if (mainMenuUI != null) mainMenuUI.Hide();
             if (shopUI != null) shopUI.Hide();
             if (rankingUI != null) rankingUI.Hide();
-            if (missionUI != null) missionUI.Show();
+            if (missionUI != null)
+            {
+                missionUI.Show();
+                AnimatePanelOpen(missionUI);
+            }
         }
 
         public void HideMissions()
@@ -320,13 +404,46 @@ namespace MyProject.UI
             if (mainMenuUI != null) mainMenuUI.Hide();
             if (shopUI != null) shopUI.Hide();
             if (missionUI != null) missionUI.Hide();
-            if (rankingUI != null) rankingUI.Show();
+            if (rankingUI != null)
+            {
+                rankingUI.Show();
+                AnimatePanelOpen(rankingUI);
+            }
         }
 
         public void HideRanking()
         {
             if (rankingUI != null) rankingUI.Hide();
             if (mainMenuUI != null) mainMenuUI.Show(GameManager.Instance != null ? GameManager.Instance.HighScore : 0);
+        }
+
+        private void AnimatePanelOpen(Component panelComp)
+        {
+            if (panelComp == null || !gameObject.activeInHierarchy) return;
+            StartCoroutine(PanelScaleInRoutine(panelComp.transform));
+        }
+
+        private System.Collections.IEnumerator PanelScaleInRoutine(Transform target)
+        {
+            if (target == null) yield break;
+            float duration = 0.15f;
+            float elapsed = 0f;
+            target.localScale = new Vector3(0.92f, 0.92f, 1f);
+
+            while (elapsed < duration && target != null)
+            {
+                elapsed += Time.unscaledDeltaTime;
+                float t = Mathf.Clamp01(elapsed / duration);
+                float easeOut = 1f - Mathf.Pow(1f - t, 3f);
+                float s = Mathf.Lerp(0.92f, 1.0f, easeOut);
+                target.localScale = new Vector3(s, s, 1f);
+                yield return null;
+            }
+
+            if (target != null)
+            {
+                target.localScale = Vector3.one;
+            }
         }
 
         private void HandleScoreChanged(int newScore)

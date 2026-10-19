@@ -1,5 +1,6 @@
 using UnityEngine;
 using UnityEngine.UI;
+using MyProject;
 
 namespace MyProject.UI
 {
@@ -61,20 +62,21 @@ namespace MyProject.UI
                 }
                 else
                 {
-                    // Dynamically instantiate clean sound toggle button in top right of menu
+                    // Dynamically instantiate clean Settings button in top right of menu
                     GameObject btnGo = new GameObject("SoundToggleBtn");
                     btnGo.transform.SetParent(menuPanel.transform, false);
 
                     RectTransform rt = btnGo.AddComponent<RectTransform>();
-                    rt.anchorMin = new Vector2(0.90f, 0.94f);
-                    rt.anchorMax = new Vector2(0.90f, 0.94f);
+                    rt.anchorMin = new Vector2(0.85f, 0.94f);
+                    rt.anchorMax = new Vector2(0.85f, 0.94f);
                     rt.pivot = new Vector2(0.5f, 0.5f);
-                    rt.sizeDelta = new Vector2(90, 90);
+                    rt.sizeDelta = new Vector2(180, 76);
 
                     Image img = btnGo.AddComponent<Image>();
-                    img.color = new Color(0.18f, 0.22f, 0.32f, 0.9f);
+                    img.color = new Color(0.18f, 0.22f, 0.34f, 0.94f);
 
                     soundButton = btnGo.AddComponent<Button>();
+                    btnGo.AddComponent<ButtonPressFeedback>();
 
                     GameObject txtGo = new GameObject("SoundBtnText");
                     txtGo.transform.SetParent(btnGo.transform, false);
@@ -85,7 +87,8 @@ namespace MyProject.UI
 
                     soundButtonText = txtGo.AddComponent<Text>();
                     soundButtonText.font = Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf");
-                    soundButtonText.fontSize = 38;
+                    soundButtonText.fontSize = 22;
+                    soundButtonText.fontStyle = FontStyle.Bold;
                     soundButtonText.alignment = TextAnchor.MiddleCenter;
                     soundButtonText.color = Color.white;
                 }
@@ -93,6 +96,14 @@ namespace MyProject.UI
 
             if (soundButton != null)
             {
+                RectTransform rt = soundButton.GetComponent<RectTransform>();
+                if (rt != null && rt.sizeDelta.x < 140f)
+                {
+                    rt.anchorMin = new Vector2(0.85f, 0.94f);
+                    rt.anchorMax = new Vector2(0.85f, 0.94f);
+                    rt.sizeDelta = new Vector2(180, 76);
+                }
+
                 soundButton.onClick.RemoveListener(OnSoundClicked);
                 soundButton.onClick.AddListener(OnSoundClicked);
             }
@@ -100,18 +111,25 @@ namespace MyProject.UI
 
         private void UpdateSoundButtonVisual()
         {
-            bool isAudioOn = AudioManager.Instance == null || AudioManager.Instance.IsAudioEnabled;
             if (soundButtonText != null)
             {
-                soundButtonText.text = isAudioOn ? "🔊" : "🔇";
+                soundButtonText.text = "SETTINGS";
+                soundButtonText.color = new Color(0.90f, 0.95f, 1.0f, 1f);
             }
         }
 
         private void OnSoundClicked()
         {
-            AudioManager.Instance?.ToggleAudio();
-            UpdateSoundButtonVisual();
             AudioManager.Instance?.PlayClick();
+            Haptics.Light();
+            if (UIManager.Instance != null)
+            {
+                UIManager.Instance.ShowSettings();
+            }
+            else
+            {
+                SettingsUI.Instance?.Show();
+            }
         }
 
         private void Update()
@@ -133,6 +151,26 @@ namespace MyProject.UI
 
             UpdateHighScore(highScore);
             UpdateSoundButtonVisual();
+            UpdateMissionButtonBadge();
+        }
+
+        private void UpdateMissionButtonBadge()
+        {
+            if (missionButton == null) return;
+            Text btnText = missionButton.GetComponentInChildren<Text>();
+            if (btnText == null) return;
+
+            int claimable = MissionUI.GetClaimableMissionCount();
+            if (claimable > 0)
+            {
+                btnText.text = $"DAILY MISSIONS ({claimable}!)";
+                btnText.color = new Color(1f, 0.95f, 0.35f, 1f);
+            }
+            else
+            {
+                btnText.text = "DAILY MISSIONS";
+                btnText.color = Color.white;
+            }
         }
 
         public void Hide()
@@ -147,7 +185,7 @@ namespace MyProject.UI
         {
             if (highScoreText != null)
             {
-                highScoreText.text = $"BEST RECORD: {highScore} FT";
+                highScoreText.text = $"BEST: {highScore}m";
             }
         }
 

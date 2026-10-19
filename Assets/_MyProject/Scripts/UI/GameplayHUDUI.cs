@@ -1,3 +1,4 @@
+using System.Collections;
 using UnityEngine;
 using UnityEngine.UI;
 
@@ -24,11 +25,21 @@ namespace MyProject.UI
         private CanvasGroup toastCanvasGroup;
         private Coroutine toastCoroutine;
 
+        [Header("Combo Badge Feedback")]
+        private GameObject comboBadgeGo;
+        private Text comboBadgeText;
+        private Coroutine comboPulseCoroutine;
+
         private void Awake()
         {
             if (Instance == null)
             {
                 Instance = this;
+            }
+
+            if (GetComponent<SafeAreaFitter>() == null)
+            {
+                gameObject.AddComponent<SafeAreaFitter>();
             }
 
             if (pauseButton != null)
@@ -37,11 +48,25 @@ namespace MyProject.UI
             }
             EnsureCoinCard();
             EnsureMagnetBadge();
+            EnsureComboBadge();
             EnsureToastBanner();
+        }
+
+        private void Start()
+        {
+            PlayerController player = GetPlayer();
+            if (player != null)
+            {
+                player.OnComboChanged += UpdateComboBadge;
+            }
         }
 
         private void OnDestroy()
         {
+            if (cachedPlayer != null)
+            {
+                cachedPlayer.OnComboChanged -= UpdateComboBadge;
+            }
             if (Instance == this)
             {
                 Instance = null;
@@ -320,19 +345,19 @@ namespace MyProject.UI
             }
         }
 
-        public void UpdateScore(int score)
+        public void UpdateScore(int meters)
         {
             if (scoreText != null)
             {
-                scoreText.text = $"SCORE: {score}";
+                scoreText.text = $"{meters}m";
             }
         }
 
-        public void UpdateHighScore(int highScore)
+        public void UpdateHighScore(int bestMeters)
         {
             if (highScoreText != null)
             {
-                highScoreText.text = $"BEST: {highScore}";
+                highScoreText.text = $"BEST: {bestMeters}m";
             }
         }
 
@@ -347,6 +372,108 @@ namespace MyProject.UI
             {
                 coinText.text = $"FISH: {coins}";
             }
+        }
+
+        public void EnsureComboBadge()
+        {
+            if (comboBadgeGo == null)
+            {
+                Transform found = transform.Find("ComboBadge");
+                if (found != null)
+                {
+                    comboBadgeGo = found.gameObject;
+                    comboBadgeText = found.Find("ComboText")?.GetComponent<Text>();
+                }
+            }
+
+            if (comboBadgeGo == null)
+            {
+                comboBadgeGo = new GameObject("ComboBadge", typeof(RectTransform), typeof(Image));
+                comboBadgeGo.transform.SetParent(transform, false);
+                RectTransform rect = comboBadgeGo.GetComponent<RectTransform>();
+                rect.anchorMin = new Vector2(0.05f, 0.725f);
+                rect.anchorMax = new Vector2(0.05f, 0.725f);
+                rect.pivot = new Vector2(0f, 1f);
+                rect.sizeDelta = new Vector2(240, 48);
+
+                Image img = comboBadgeGo.GetComponent<Image>();
+                img.color = new Color(0.12f, 0.15f, 0.24f, 0.9f);
+                img.raycastTarget = false;
+
+                GameObject textGo = new GameObject("ComboText", typeof(RectTransform), typeof(Text));
+                textGo.transform.SetParent(comboBadgeGo.transform, false);
+                RectTransform textRect = textGo.GetComponent<RectTransform>();
+                textRect.anchorMin = Vector2.zero;
+                textRect.anchorMax = Vector2.one;
+                textRect.sizeDelta = Vector2.zero;
+
+                comboBadgeText = textGo.GetComponent<Text>();
+                comboBadgeText.text = "2x COMBO";
+                comboBadgeText.font = Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf") ?? Font.CreateDynamicFontFromOSFont("Arial", 22);
+                comboBadgeText.fontSize = 22;
+                comboBadgeText.fontStyle = FontStyle.Bold;
+                comboBadgeText.color = new Color(0.4f, 0.95f, 0.5f, 1f);
+                comboBadgeText.alignment = TextAnchor.MiddleCenter;
+                comboBadgeText.raycastTarget = false;
+
+                comboBadgeGo.SetActive(false);
+            }
+        }
+
+        public void UpdateComboBadge(int combo)
+        {
+            if (comboBadgeGo == null) EnsureComboBadge();
+            if (comboBadgeGo == null) return;
+
+            if (combo <= 1)
+            {
+                if (comboBadgeGo.activeSelf) comboBadgeGo.SetActive(false);
+                return;
+            }
+
+            comboBadgeGo.SetActive(true);
+
+            Color col = combo switch
+            {
+                <= 3 => new Color(0.4f, 0.95f, 0.5f, 1f),
+                <= 7 => new Color(0.3f, 0.85f, 1f, 1f),
+                <= 11 => new Color(1f, 0.6f, 0.2f, 1f),
+                _ => new Color(1f, 0.3f, 0.85f, 1f)
+            };
+
+            string label = combo switch
+            {
+                <= 3 => $"{combo}x COMBO",
+                <= 7 => $"{combo}x STREAK!",
+                <= 11 => $"{combo}x ON FIRE!",
+                _ => $"{combo}x UNSTOPPABLE!"
+            };
+
+            if (comboBadgeText != null)
+            {
+                comboBadgeText.text = label;
+                comboBadgeText.color = col;
+            }
+
+            if (comboPulseCoroutine != null) StopCoroutine(comboPulseCoroutine);
+            comboPulseCoroutine = StartCoroutine(PulseBadgeRoutine(comboBadgeGo.GetComponent<RectTransform>()));
+        }
+
+        private IEnumerator PulseBadgeRoutine(RectTransform rect)
+        {
+            if (rect == null) yield break;
+            float elapsed = 0f;
+            float duration = 0.12f;
+            while (elapsed < duration)
+            {
+                elapsed += Time.unscaledDeltaTime;
+                float t = elapsed / duration;
+                float s = Mathf.Lerp(1.25f, 1f, t);
+                rect.localScale = new Vector3(s, s, 1f);
+                yield return null;
+            }
+            rect.localScale = Vector3.one;
+            comboPulseCoroutine = null;
         }
     }
 }

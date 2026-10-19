@@ -25,6 +25,7 @@ namespace MyProject.Editor
             }
 
             EditorApplication.update -= CheckAndAutoGenerate;
+            SyncSolutionReflection();
             AutoGenerateScenesIfNeeded();
         }
 
@@ -100,6 +101,34 @@ namespace MyProject.Editor
         {
             Debug.Log("Manually triggering Gameplay Scene creation...");
             CreateScene("GameplayScene", true);
+        }
+
+        [MenuItem("Tools/MyProject/Apply Mobile Player Settings")]
+        public static void ApplyMobilePlayerSettings()
+        {
+            Debug.Log("[SceneSetup] Applying Mobile Player Settings...");
+
+            // 1. Force Portrait Only
+            PlayerSettings.defaultInterfaceOrientation = UIOrientation.Portrait;
+            PlayerSettings.allowedAutorotateToPortrait = true;
+            PlayerSettings.allowedAutorotateToPortraitUpsideDown = false;
+            PlayerSettings.allowedAutorotateToLandscapeLeft = false;
+            PlayerSettings.allowedAutorotateToLandscapeRight = false;
+
+            // 2. Set clean product metadata
+            PlayerSettings.productName = "Cat Climb";
+            PlayerSettings.companyName = "MyProject";
+
+            // 3. Clean EditorBuildSettings scenes: only include GameplayScene.unity (active) & PrototypeScene.unity (disabled)
+            EditorBuildSettingsScene[] desiredScenes = new EditorBuildSettingsScene[]
+            {
+                new EditorBuildSettingsScene("Assets/_MyProject/Scenes/GameplayScene.unity", true),
+                new EditorBuildSettingsScene("Assets/_MyProject/Scenes/PrototypeScene.unity", false)
+            };
+            EditorBuildSettings.scenes = desiredScenes;
+
+            AssetDatabase.SaveAssets();
+            Debug.Log("[SceneSetup] Mobile Player Settings successfully applied!");
         }
 
         private static void CreateScene(string sceneName, bool usePixelCat)
@@ -344,6 +373,8 @@ namespace MyProject.Editor
             if (File.Exists(groundSquarePath)) SetAsSprite(groundSquarePath);
             string groundVerticalPath = Path.Combine(spritesDir, "GroundVertical.png");
             if (File.Exists(groundVerticalPath)) SetAsSprite(groundVerticalPath);
+            string groundHorizontalPath = Path.Combine(spritesDir, "GroundHorizontal.png");
+            if (File.Exists(groundHorizontalPath)) SetAsSprite(groundHorizontalPath);
             string groundDirtOnlyPath = Path.Combine(spritesDir, "GroundDirtOnly.png");
             if (File.Exists(groundDirtOnlyPath)) SetAsSprite(groundDirtOnlyPath);
             string pauseJpgPath = Path.Combine(spritesDir, "PauseIcon.jpg");
@@ -658,6 +689,10 @@ namespace MyProject.Editor
             {
                 platformManager.groundVerticalSprite = AssetDatabase.LoadAssetAtPath<Sprite>(groundVerticalPath);
             }
+            if (File.Exists(groundHorizontalPath))
+            {
+                platformManager.groundHorizontalSprite = AssetDatabase.LoadAssetAtPath<Sprite>(groundHorizontalPath);
+            }
             if (File.Exists(groundDirtOnlyPath))
             {
                 platformManager.groundDirtOnlySprite = AssetDatabase.LoadAssetAtPath<Sprite>(groundDirtOnlyPath);
@@ -687,6 +722,31 @@ namespace MyProject.Editor
             GameObject fxManagerGo = new GameObject("FXManager");
             fxManagerGo.AddComponent<FXManager>();
 
+            // Configure and assign cosmetic Hat sprites
+            string[] hatFiles = { "HatCrown.png", "HatNinjaBand.png", "HatParty.png", "HatAstro.png" };
+            for (int h = 0; h < hatFiles.Length; h++)
+            {
+                string hp = Path.Combine(spritesDir, hatFiles[h]);
+                if (File.Exists(hp))
+                {
+                    SetAsSprite(hp);
+                    TextureImporter hatImp = AssetImporter.GetAtPath(hp) as TextureImporter;
+                    if (hatImp != null)
+                    {
+                        hatImp.filterMode = FilterMode.Point;
+                        hatImp.textureCompression = TextureImporterCompression.Uncompressed;
+                        hatImp.SaveAndReimport();
+                    }
+                }
+            }
+            if (playerCtrl != null)
+            {
+                playerCtrl.hatCrownSprite = AssetDatabase.LoadAssetAtPath<Sprite>(Path.Combine(spritesDir, "HatCrown.png"));
+                playerCtrl.hatNinjaBandSprite = AssetDatabase.LoadAssetAtPath<Sprite>(Path.Combine(spritesDir, "HatNinjaBand.png"));
+                playerCtrl.hatPartySprite = AssetDatabase.LoadAssetAtPath<Sprite>(Path.Combine(spritesDir, "HatParty.png"));
+                playerCtrl.hatAstroSprite = AssetDatabase.LoadAssetAtPath<Sprite>(Path.Combine(spritesDir, "HatAstro.png"));
+            }
+
             // Create Audio Manager & Biome Manager
             GameObject audioManagerGo = new GameObject("AudioManager");
             AudioManager audioManager = audioManagerGo.AddComponent<AudioManager>();
@@ -698,9 +758,16 @@ namespace MyProject.Editor
             audioManager.hitClip = AssetDatabase.LoadAssetAtPath<AudioClip>("Assets/_MyProject/Audio/sfx_hit.wav");
             audioManager.streakClip = AssetDatabase.LoadAssetAtPath<AudioClip>("Assets/_MyProject/Audio/sfx_streak.wav");
             audioManager.clickClip = AssetDatabase.LoadAssetAtPath<AudioClip>("Assets/_MyProject/Audio/sfx_click.wav");
+            audioManager.bgmAlley = AssetDatabase.LoadAssetAtPath<AudioClip>("Assets/_MyProject/Audio/bgm_alley.wav");
+            audioManager.bgmRooftops = AssetDatabase.LoadAssetAtPath<AudioClip>("Assets/_MyProject/Audio/bgm_rooftops.wav");
+            audioManager.bgmStratosphere = AssetDatabase.LoadAssetAtPath<AudioClip>("Assets/_MyProject/Audio/bgm_stratosphere.wav");
+            audioManager.bgmSpace = AssetDatabase.LoadAssetAtPath<AudioClip>("Assets/_MyProject/Audio/bgm_space.wav");
 
             GameObject biomeManagerGo = new GameObject("BiomeManager");
             biomeManagerGo.AddComponent<BiomeManager>();
+
+            GameObject difficultyDirectorGo = new GameObject("DifficultyDirector");
+            difficultyDirectorGo.AddComponent<DifficultyDirector>();
 
             // 5. Cinemachine Setup via Reflection (avoids compilation reference issues)
             System.Type brainType = System.Type.GetType("Unity.Cinemachine.CinemachineBrain,Unity.Cinemachine") ?? System.Type.GetType("Cinemachine.CinemachineBrain,Cinemachine");
@@ -994,14 +1061,14 @@ namespace MyProject.Editor
                     needsSave = true;
                 }
 
-                FilterMode targetFilter = (path.Contains("pixel_cat") || path.Contains("pixel_wall_tile") || path.Contains("GroundSprite") || path.Contains("GroundSquare") || path.Contains("GroundVertical") || path.Contains("GroundDirtOnly") || path.Contains("EnemyMouse") || path.Contains("MagnetItem") || path.Contains("FishTreat")) ? FilterMode.Point : FilterMode.Bilinear;
+                FilterMode targetFilter = (path.Contains("pixel_cat") || path.Contains("pixel_wall_tile") || path.Contains("GroundSprite") || path.Contains("GroundSquare") || path.Contains("GroundVertical") || path.Contains("GroundHorizontal") || path.Contains("GroundDirtOnly") || path.Contains("EnemyMouse") || path.Contains("MagnetItem") || path.Contains("FishTreat")) ? FilterMode.Point : FilterMode.Bilinear;
                 if (importer.filterMode != targetFilter)
                 {
                     importer.filterMode = targetFilter;
                     needsSave = true;
                 }
 
-                if (path.Contains("pixel_wall_tile") || path.Contains("GroundSprite") || path.Contains("GroundSquare") || path.Contains("GroundVertical") || path.Contains("GroundDirtOnly") || path.Contains("WallSquare"))
+                if (path.Contains("pixel_wall_tile") || path.Contains("GroundSprite") || path.Contains("GroundSquare") || path.Contains("GroundVertical") || path.Contains("GroundHorizontal") || path.Contains("GroundDirtOnly") || path.Contains("WallSquare"))
                 {
                     if (importer.wrapMode != TextureWrapMode.Repeat)
                     {
@@ -1078,7 +1145,7 @@ namespace MyProject.Editor
             subRect.sizeDelta = new Vector2(800, 50);
 
             // High Score Display
-            GameObject highScoreGo = CreateUIText(mainMenuGo.transform, "HighScoreText", "BEST RECORD: 0 FT", 34, FontStyle.Bold, new Color(1f, 0.9f, 0.4f, 1f), TextAnchor.MiddleCenter);
+            GameObject highScoreGo = CreateUIText(mainMenuGo.transform, "HighScoreText", "BEST: 0m", 34, FontStyle.Bold, new Color(1f, 0.9f, 0.4f, 1f), TextAnchor.MiddleCenter);
             RectTransform hsRect = highScoreGo.GetComponent<RectTransform>();
             hsRect.anchorMin = new Vector2(0.5f, 0.58f);
             hsRect.anchorMax = new Vector2(0.5f, 0.58f);
@@ -1137,7 +1204,7 @@ namespace MyProject.Editor
             scoreCardRect.pivot = new Vector2(0f, 1f);
             scoreCardRect.sizeDelta = new Vector2(340, 90);
 
-            GameObject hudScoreGo = CreateUIText(scoreCard.transform, "ScoreText", "SCORE: 0", 28, FontStyle.Bold, new Color(0.3f, 0.8f, 0.75f, 1f), TextAnchor.MiddleCenter);
+            GameObject hudScoreGo = CreateUIText(scoreCard.transform, "ScoreText", "0m", 28, FontStyle.Bold, new Color(0.3f, 0.8f, 0.75f, 1f), TextAnchor.MiddleCenter);
             RectTransform hudScoreRect = hudScoreGo.GetComponent<RectTransform>();
             hudScoreRect.anchorMin = new Vector2(0.5f, 0.5f);
             hudScoreRect.anchorMax = new Vector2(0.5f, 0.5f);
@@ -1190,7 +1257,7 @@ namespace MyProject.Editor
             }
 
             // High Score Display (Next to Pause Button)
-            GameObject hudHsGo = CreateUIText(hudGo.transform, "HighScoreText", "BEST: 0", 24, FontStyle.Bold, new Color(1f, 0.9f, 0.4f, 1f), TextAnchor.MiddleRight);
+            GameObject hudHsGo = CreateUIText(hudGo.transform, "HighScoreText", "BEST: 0m", 24, FontStyle.Bold, new Color(1f, 0.9f, 0.4f, 1f), TextAnchor.MiddleRight);
             RectTransform hudHsRect = hudHsGo.GetComponent<RectTransform>();
             hudHsRect.anchorMin = new Vector2(0.82f, 0.94f);
             hudHsRect.anchorMax = new Vector2(0.82f, 0.94f);
@@ -1225,36 +1292,81 @@ namespace MyProject.Editor
             GameObject gameOverGo = CreateUIPanel(canvasGo.transform, "GameOverPanel", new Color(0.08f, 0.09f, 0.12f, 0.88f));
             MyProject.UI.GameOverUI gameOverUI = gameOverGo.AddComponent<MyProject.UI.GameOverUI>();
 
-            GameObject goTitleGo = CreateUIText(gameOverGo.transform, "GameOverTitle", "GAME OVER", 76, FontStyle.Bold, new Color(1f, 0.4f, 0.4f, 1f), TextAnchor.MiddleCenter);
+            // Celebration Banner
+            GameObject bannerGo = CreateUIText(gameOverGo.transform, "CelebrationBanner", "", 24, FontStyle.Bold, new Color(1f, 0.88f, 0.2f, 1f), TextAnchor.MiddleCenter);
+            RectTransform bannerRect = bannerGo.GetComponent<RectTransform>();
+            bannerRect.anchorMin = new Vector2(0.5f, 0.77f);
+            bannerRect.anchorMax = new Vector2(0.5f, 0.77f);
+            bannerRect.pivot = new Vector2(0.5f, 0.5f);
+            bannerRect.sizeDelta = new Vector2(720, 50);
+
+            // Title
+            GameObject goTitleGo = CreateUIText(gameOverGo.transform, "GameOverTitle", "GAME OVER", 74, FontStyle.Bold, new Color(1f, 0.4f, 0.4f, 1f), TextAnchor.MiddleCenter);
             RectTransform goTitleRect = goTitleGo.GetComponent<RectTransform>();
-            goTitleRect.anchorMin = new Vector2(0.5f, 0.66f);
-            goTitleRect.anchorMax = new Vector2(0.5f, 0.66f);
-            goTitleRect.sizeDelta = new Vector2(800, 110);
+            goTitleRect.anchorMin = new Vector2(0.5f, 0.69f);
+            goTitleRect.anchorMax = new Vector2(0.5f, 0.69f);
+            goTitleRect.pivot = new Vector2(0.5f, 0.5f);
+            goTitleRect.sizeDelta = new Vector2(800, 90);
 
-            GameObject goScoreGo = CreateUIText(gameOverGo.transform, "FinalScoreText", "FINAL SCORE\n0", 44, FontStyle.Bold, new Color(0.3f, 0.8f, 0.75f, 1f), TextAnchor.MiddleCenter);
+            // Final Score Text
+            GameObject goScoreGo = CreateUIText(gameOverGo.transform, "FinalScoreText", "0m", 58, FontStyle.Bold, new Color(0.3f, 0.95f, 0.8f, 1f), TextAnchor.MiddleCenter);
             RectTransform goScoreRect = goScoreGo.GetComponent<RectTransform>();
-            goScoreRect.anchorMin = new Vector2(0.5f, 0.50f);
-            goScoreRect.anchorMax = new Vector2(0.5f, 0.50f);
-            goScoreRect.sizeDelta = new Vector2(800, 120);
+            goScoreRect.anchorMin = new Vector2(0.5f, 0.57f);
+            goScoreRect.anchorMax = new Vector2(0.5f, 0.57f);
+            goScoreRect.pivot = new Vector2(0.5f, 0.5f);
+            goScoreRect.sizeDelta = new Vector2(600, 110);
 
-            GameObject goHsGo = CreateUIText(gameOverGo.transform, "HighScoreText", "BEST RECORD: 0", 32, FontStyle.Bold, new Color(1f, 0.9f, 0.4f, 1f), TextAnchor.MiddleCenter);
+            // Fish Earned Text
+            GameObject fishEarnedGo = CreateUIText(gameOverGo.transform, "FishEarnedText", "+0 FISH", 26, FontStyle.Bold, new Color(1f, 0.84f, 0.28f, 1f), TextAnchor.MiddleCenter);
+            RectTransform fishEarnedRect = fishEarnedGo.GetComponent<RectTransform>();
+            fishEarnedRect.anchorMin = new Vector2(0.5f, 0.47f);
+            fishEarnedRect.anchorMax = new Vector2(0.5f, 0.47f);
+            fishEarnedRect.pivot = new Vector2(0.5f, 0.5f);
+            fishEarnedRect.sizeDelta = new Vector2(500, 42);
+
+            // High Score Text
+            GameObject goHsGo = CreateUIText(gameOverGo.transform, "HighScoreText", "BEST: 0m", 26, FontStyle.Bold, new Color(1f, 0.92f, 0.45f, 1f), TextAnchor.MiddleCenter);
             RectTransform goHsRect = goHsGo.GetComponent<RectTransform>();
-            goHsRect.anchorMin = new Vector2(0.5f, 0.39f);
-            goHsRect.anchorMax = new Vector2(0.5f, 0.39f);
-            goHsRect.sizeDelta = new Vector2(800, 60);
+            goHsRect.anchorMin = new Vector2(0.5f, 0.41f);
+            goHsRect.anchorMax = new Vector2(0.5f, 0.41f);
+            goHsRect.pivot = new Vector2(0.5f, 0.5f);
+            goHsRect.sizeDelta = new Vector2(600, 45);
 
-            GameObject restartBtnGo = CreateUIButton(gameOverGo.transform, "RestartButton", "RESTART", 40, new Color(1f, 0.45f, 0.45f, 1f), Color.white);
+            // Run Stats Text
+            GameObject statsGo = CreateUIText(gameOverGo.transform, "RunStatsText", "MAX COMBO: 0x   |   WALL KICKS: 0   |   MICE: 0", 17, FontStyle.Normal, new Color(0.80f, 0.86f, 0.96f, 0.95f), TextAnchor.MiddleCenter);
+            RectTransform statsRect = statsGo.GetComponent<RectTransform>();
+            statsRect.anchorMin = new Vector2(0.5f, 0.33f);
+            statsRect.anchorMax = new Vector2(0.5f, 0.33f);
+            statsRect.pivot = new Vector2(0.5f, 0.5f);
+            statsRect.sizeDelta = new Vector2(720, 36);
+
+            // Restart Button (TRY AGAIN)
+            GameObject restartBtnGo = CreateUIButton(gameOverGo.transform, "RestartButton", "TRY AGAIN", 34, new Color(1f, 0.38f, 0.42f, 1f), Color.white);
             RectTransform restartBtnRect = restartBtnGo.GetComponent<RectTransform>();
-            restartBtnRect.anchorMin = new Vector2(0.5f, 0.26f);
-            restartBtnRect.anchorMax = new Vector2(0.5f, 0.26f);
-            restartBtnRect.sizeDelta = new Vector2(400, 110);
+            restartBtnRect.anchorMin = new Vector2(0.5f, 0.21f);
+            restartBtnRect.anchorMax = new Vector2(0.5f, 0.21f);
+            restartBtnRect.pivot = new Vector2(0.5f, 0.5f);
+            restartBtnRect.sizeDelta = new Vector2(460, 96);
             UnityEngine.UI.Button restartBtn = restartBtnGo.GetComponent<UnityEngine.UI.Button>();
 
+            // Home Button (MAIN MENU)
+            GameObject goHomeBtnGo = CreateUIButton(gameOverGo.transform, "HomeButton", "MAIN MENU", 24, new Color(0.20f, 0.24f, 0.36f, 0.95f), new Color(0.92f, 0.95f, 1f, 1f));
+            RectTransform goHomeBtnRect = goHomeBtnGo.GetComponent<RectTransform>();
+            goHomeBtnRect.anchorMin = new Vector2(0.5f, 0.11f);
+            goHomeBtnRect.anchorMax = new Vector2(0.5f, 0.11f);
+            goHomeBtnRect.pivot = new Vector2(0.5f, 0.5f);
+            goHomeBtnRect.sizeDelta = new Vector2(360, 76);
+            UnityEngine.UI.Button goHomeBtn = goHomeBtnGo.GetComponent<UnityEngine.UI.Button>();
+
             SetPrivateField(gameOverUI, "gameOverPanel", gameOverGo);
+            SetPrivateField(gameOverUI, "celebrationBannerText", bannerGo.GetComponent<UnityEngine.UI.Text>());
             SetPrivateField(gameOverUI, "titleText", goTitleGo.GetComponent<UnityEngine.UI.Text>());
             SetPrivateField(gameOverUI, "finalScoreText", goScoreGo.GetComponent<UnityEngine.UI.Text>());
+            SetPrivateField(gameOverUI, "fishEarnedText", fishEarnedGo.GetComponent<UnityEngine.UI.Text>());
             SetPrivateField(gameOverUI, "highScoreText", goHsGo.GetComponent<UnityEngine.UI.Text>());
+            SetPrivateField(gameOverUI, "runStatsText", statsGo.GetComponent<UnityEngine.UI.Text>());
             SetPrivateField(gameOverUI, "restartButton", restartBtn);
+            SetPrivateField(gameOverUI, "homeButton", goHomeBtn);
 
             // 6. Create ShopPanel
             GameObject shopGo = CreateUIPanel(canvasGo.transform, "ShopPanel", new Color(0.08f, 0.09f, 0.14f, 0.96f));
@@ -1266,7 +1378,7 @@ namespace MyProject.Editor
             shopTitleRect.anchorMax = new Vector2(0.5f, 0.90f);
             shopTitleRect.sizeDelta = new Vector2(800, 80);
 
-            GameObject shopHsGo = CreateUIText(shopGo.transform, "ShopHighScoreText", "BEST RECORD: 0 FT", 28, FontStyle.Bold, new Color(0.3f, 0.8f, 0.75f, 1f), TextAnchor.MiddleCenter);
+            GameObject shopHsGo = CreateUIText(shopGo.transform, "ShopHighScoreText", "BEST: 0m", 28, FontStyle.Bold, new Color(0.3f, 0.8f, 0.75f, 1f), TextAnchor.MiddleCenter);
             RectTransform shopHsRect = shopHsGo.GetComponent<RectTransform>();
             shopHsRect.anchorMin = new Vector2(0.5f, 0.84f);
             shopHsRect.anchorMax = new Vector2(0.5f, 0.84f);
@@ -1427,7 +1539,7 @@ namespace MyProject.Editor
             rankTitleRect.anchorMax = new Vector2(0.5f, 0.90f);
             rankTitleRect.sizeDelta = new Vector2(800, 80);
 
-            GameObject userRankGo = CreateUIText(rankingGo.transform, "UserRankText", "YOUR RANK: #4 (BEST: 0 FT)", 28, FontStyle.Bold, new Color(1f, 0.9f, 0.3f, 1f), TextAnchor.MiddleCenter);
+            GameObject userRankGo = CreateUIText(rankingGo.transform, "UserRankText", "YOUR RANK: #4 (BEST: 0m)", 28, FontStyle.Bold, new Color(1f, 0.9f, 0.3f, 1f), TextAnchor.MiddleCenter);
             RectTransform userRankRect = userRankGo.GetComponent<RectTransform>();
             userRankRect.anchorMin = new Vector2(0.5f, 0.84f);
             userRankRect.anchorMax = new Vector2(0.5f, 0.84f);
@@ -1465,7 +1577,7 @@ namespace MyProject.Editor
                 nameRect.sizeDelta = new Vector2(400, 45);
 
                 // Score Text
-                GameObject scoreGo = CreateUIText(cardGo.transform, "Score", "0 FT", 28, FontStyle.Bold, new Color(0.3f, 0.95f, 0.8f, 1f), TextAnchor.MiddleRight);
+                GameObject scoreGo = CreateUIText(cardGo.transform, "Score", "0m", 28, FontStyle.Bold, new Color(0.3f, 0.95f, 0.8f, 1f), TextAnchor.MiddleRight);
                 RectTransform scoreRect = scoreGo.GetComponent<RectTransform>();
                 scoreRect.anchorMin = new Vector2(0.94f, 0.5f);
                 scoreRect.anchorMax = new Vector2(0.94f, 0.5f);

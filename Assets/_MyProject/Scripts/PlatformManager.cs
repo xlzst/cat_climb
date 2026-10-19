@@ -44,8 +44,10 @@ namespace MyProject
         [SerializeField] private float recycleOffset = 6f;
 
         [Header("Moving Platform Settings")]
-        [Tooltip("Score threshold required to unlock moving platforms. Set to 100 for testing (change to 3000 for production).")]
-        public int movingPlatformScoreThreshold = 100;
+        [Tooltip("Altitude in meters required to unlock moving platforms.")]
+        public int movingPlatformScoreThreshold = 20;
+        [Tooltip("Chance for an eligible platform above the threshold to move vertically.")]
+        [SerializeField] private float movingPlatformChance = 0.35f;
 
         private List<GameObject> platformPool = new List<GameObject>();
         public IReadOnlyList<GameObject> PlatformPool => platformPool;
@@ -56,6 +58,7 @@ namespace MyProject
         public Sprite groundSprite;
         public Sprite groundSquareSprite;
         public Sprite groundVerticalSprite;
+        public Sprite groundHorizontalSprite;
         public Sprite groundDirtOnlySprite;
         public Sprite wallSquareSprite;
 
@@ -118,6 +121,17 @@ namespace MyProject
                 if (groundVerticalSprite == null)
                 {
                     groundVerticalSprite = UnityEditor.AssetDatabase.LoadAssetAtPath<Sprite>("Assets/_MyProject/Sprites/GroundVertical.png");
+                }
+#endif
+            }
+
+            if (groundHorizontalSprite == null)
+            {
+                groundHorizontalSprite = Resources.Load<Sprite>("GroundHorizontal");
+#if UNITY_EDITOR
+                if (groundHorizontalSprite == null)
+                {
+                    groundHorizontalSprite = UnityEditor.AssetDatabase.LoadAssetAtPath<Sprite>("Assets/_MyProject/Sprites/GroundHorizontal.png");
                 }
 #endif
             }
@@ -370,7 +384,10 @@ namespace MyProject
                 float maxX = Mathf.Max(0f, 2.6125f - (worldWidth / 2f));
                 float airMaxX = Mathf.Max(0f, 2.0625f - (worldWidth / 2f));
 
-                bool shouldSpawnEnemy = Random.value <= 0.1f;
+                float enemyChance = DifficultyDirector.Instance != null
+                    ? DifficultyDirector.Instance.GetEnemyChance(currentSpawnY)
+                    : 0.1f;
+                bool shouldSpawnEnemy = Random.value <= enemyChance;
 
                 Vector3 chosenPos = Vector3.zero;
                 Vector3 chosenEnemyLocalPos = Vector3.zero;
@@ -436,6 +453,20 @@ namespace MyProject
                 platformInstance.transform.position = chosenPos;
                 platformInstance.SetActive(true);
 
+                // Configure MovingPlatform with final chosenPos.y
+                MovingPlatform movingComp = platformInstance.GetComponent<MovingPlatform>();
+                if (movingComp != null)
+                {
+                    float moveChance = DifficultyDirector.Instance != null
+                        ? DifficultyDirector.Instance.GetMovingPlatformChance(chosenPos.y)
+                        : ((chosenPos.y >= movingPlatformScoreThreshold) ? movingPlatformChance : 0f);
+                    float speedMult = DifficultyDirector.Instance != null
+                        ? DifficultyDirector.Instance.GetMovingSpeedMultiplier(chosenPos.y)
+                        : 1f;
+                    bool shouldMove = (shapeChoice == 0 || shapeChoice == 2) && (Random.value <= moveChance);
+                    movingComp.ConfigureMovement(shapeChoice, shouldMove, speedMult);
+                }
+
                 // Attach FragilePlatform component
                 FragilePlatform fragileComp = platformInstance.AddComponent<FragilePlatform>();
 
@@ -455,7 +486,10 @@ namespace MyProject
                 }
 
                 // Configure Fragile Platform (only on non-vertical platforms, when no enemy)
-                bool isFragile = (shapeChoice != 1) && !shouldSpawnEnemy && (Random.value <= fragilePlatformChance);
+                float effFragileChance = DifficultyDirector.Instance != null
+                    ? DifficultyDirector.Instance.GetFragileChance(chosenPos.y)
+                    : fragilePlatformChance;
+                bool isFragile = (shapeChoice != 1) && !shouldSpawnEnemy && (Random.value <= effFragileChance);
                 SpriteRenderer sr = platformInstance.GetComponent<SpriteRenderer>();
                 Color baseCol = (sr != null) ? sr.color : Color.white;
                 fragileComp.ConfigureFragile(isFragile, baseCol);
@@ -482,7 +516,13 @@ namespace MyProject
                 CreateFishTreatChild(platformInstance, shouldSpawnFishTreat, chosenFishTreatLocalPos);
 
                 highestPlatformY = Mathf.Max(highestPlatformY, chosenPos.y);
-                currentSpawnY = highestPlatformY + Random.Range(minVerticalSpacing, maxVerticalSpacing);
+                float minSp = minVerticalSpacing;
+                float maxSp = maxVerticalSpacing;
+                if (DifficultyDirector.Instance != null)
+                {
+                    DifficultyDirector.Instance.GetPlatformSpacing(highestPlatformY, out minSp, out maxSp);
+                }
+                currentSpawnY = highestPlatformY + Random.Range(minSp, maxSp);
             }
 
             // Cleanup the temporary template if we created one
@@ -547,8 +587,13 @@ namespace MyProject
             }
             else
             {
-                // Horizontally Long Rectangle - use groundSquareSprite (128x128) for 1:1 scale matching with collider
-                if (groundSquareSprite != null)
+                // Horizontally Long Rectangle - use dedicated GroundHorizontal sprite so pixels are crisp and unstretched at (1.5, 0.3) scale
+                if (groundHorizontalSprite != null)
+                {
+                    spriteToUse = groundHorizontalSprite;
+                    colorToUse = Color.white;
+                }
+                else if (groundSquareSprite != null)
                 {
                     spriteToUse = groundSquareSprite;
                     colorToUse = Color.white;
@@ -588,8 +633,8 @@ namespace MyProject
                 movingComp = platform.AddComponent<MovingPlatform>();
             }
 
-            bool isScoreReached = (GameManager.Instance != null && GameManager.Instance.CurrentScore >= movingPlatformScoreThreshold) || platform.transform.position.y >= (movingPlatformScoreThreshold / 10f);
-            bool shouldMove = isScoreReached && (shapeChoice == 0 || shapeChoice == 2);
+            bool isThresholdReached = (GameManager.Instance != null && GameManager.Instance.CurrentMeters >= movingPlatformScoreThreshold) || platform.transform.position.y >= movingPlatformScoreThreshold;
+            bool shouldMove = isThresholdReached && (shapeChoice == 0 || shapeChoice == 2) && (Random.value <= movingPlatformChance);
             movingComp.ConfigureMovement(shapeChoice, shouldMove);
         }
 
@@ -744,12 +789,6 @@ namespace MyProject
             float maxX = Mathf.Max(0f, 2.6125f - (worldWidth / 2f));
             float airMaxX = Mathf.Max(0f, 2.0625f - (worldWidth / 2f));
 
-            bool shouldSpawnEnemy = Random.value <= 0.1f;
-
-            Vector3 chosenPos = Vector3.zero;
-            Vector3 chosenEnemyLocalPos = Vector3.zero;
-            bool found = false;
-
             // Dynamically anchor to the current highest active platform in the scene
             float baseTopY = GetHighestPlatformY(platform);
             if (cameraTransform != null)
@@ -761,7 +800,22 @@ namespace MyProject
                 }
             }
 
-            float targetY = baseTopY + Random.Range(minVerticalSpacing, maxVerticalSpacing);
+            float minSp = minVerticalSpacing;
+            float maxSp = maxVerticalSpacing;
+            if (DifficultyDirector.Instance != null)
+            {
+                DifficultyDirector.Instance.GetPlatformSpacing(baseTopY, out minSp, out maxSp);
+            }
+            float targetY = baseTopY + Random.Range(minSp, maxSp);
+
+            float enemyChance = DifficultyDirector.Instance != null
+                ? DifficultyDirector.Instance.GetEnemyChance(targetY)
+                : 0.1f;
+            bool shouldSpawnEnemy = Random.value <= enemyChance;
+
+            Vector3 chosenPos = Vector3.zero;
+            Vector3 chosenEnemyLocalPos = Vector3.zero;
+            bool found = false;
 
             for (int yStep = 0; yStep < 30 && !found; yStep++)
             {
@@ -826,12 +880,17 @@ namespace MyProject
             MovingPlatform movingComp = platform.GetComponent<MovingPlatform>();
             if (movingComp != null)
             {
-                bool isScoreReached = (GameManager.Instance != null && GameManager.Instance.CurrentScore >= movingPlatformScoreThreshold) || chosenPos.y >= (movingPlatformScoreThreshold / 10f);
-                bool shouldMove = isScoreReached && (movingComp.ShapeChoice == 0 || movingComp.ShapeChoice == 2);
-                movingComp.ConfigureMovement(movingComp.ShapeChoice, shouldMove);
+                float moveChance = DifficultyDirector.Instance != null
+                    ? DifficultyDirector.Instance.GetMovingPlatformChance(chosenPos.y)
+                    : ((chosenPos.y >= movingPlatformScoreThreshold) ? movingPlatformChance : 0f);
+                float speedMult = DifficultyDirector.Instance != null
+                    ? DifficultyDirector.Instance.GetMovingSpeedMultiplier(chosenPos.y)
+                    : 1f;
+                bool shouldMove = (movingComp.ShapeChoice == 0 || movingComp.ShapeChoice == 2) && (Random.value <= moveChance);
+                movingComp.ConfigureMovement(movingComp.ShapeChoice, shouldMove, speedMult);
             }
 
-            // Handle enemy recycling (10% chance to spawn on top)
+            // Handle enemy recycling
             Transform enemyTransform = platform.transform.Find("Enemy");
             if (enemyTransform != null)
             {
@@ -869,7 +928,10 @@ namespace MyProject
             if (fragileComp != null)
             {
                 fragileComp.ResetFragile();
-                bool isFragile = (shapeChoice != 1) && !shouldSpawnEnemy && (Random.value <= fragilePlatformChance);
+                float effFragileChance = DifficultyDirector.Instance != null
+                    ? DifficultyDirector.Instance.GetFragileChance(chosenPos.y)
+                    : fragilePlatformChance;
+                bool isFragile = (shapeChoice != 1) && !shouldSpawnEnemy && (Random.value <= effFragileChance);
                 SpriteRenderer sr = platform.GetComponent<SpriteRenderer>();
                 Color baseCol = (sr != null) ? sr.color : Color.white;
                 fragileComp.ConfigureFragile(isFragile, baseCol);
@@ -965,6 +1027,76 @@ namespace MyProject
                     }
                 }
             }
+            return false;
+        }
+
+        public bool IsPlatform(GameObject go)
+        {
+            if (go == null) return false;
+            for (int i = 0; i < platformPool.Count; i++)
+            {
+                GameObject p = platformPool[i];
+                if (p == null) continue;
+                if (p == go || (go.transform.parent != null && (p == go.transform.parent.gameObject || go.transform.IsChildOf(p.transform))))
+                {
+                    return true;
+                }
+            }
+            if (go.GetComponent<MovingPlatform>() != null || go.GetComponent<FragilePlatform>() != null)
+            {
+                return true;
+            }
+            if (go.GetComponentInParent<MovingPlatform>() != null || go.GetComponentInParent<FragilePlatform>() != null)
+            {
+                return true;
+            }
+            return go.name.Contains("Platform");
+        }
+
+        /// <summary>
+        /// Locates an active, non-fragile, spike-free platform within the requested vertical band to place a revived player safely.
+        /// </summary>
+        public bool TryGetSafeRespawnPoint(float minY, float maxY, out Vector3 respawnPos)
+        {
+            float targetCenterY = (minY + maxY) * 0.5f;
+            GameObject bestPlatform = null;
+            float bestDistToCenter = float.MaxValue;
+
+            for (int i = 0; i < platformPool.Count; i++)
+            {
+                GameObject p = platformPool[i];
+                if (p == null || !p.activeInHierarchy) continue;
+
+                float py = p.transform.position.y;
+                if (py < minY || py > maxY) continue;
+
+                // Avoid fragile crumbling platforms for respawn
+                FragilePlatform fragile = p.GetComponent<FragilePlatform>();
+                if (fragile != null && fragile.enabled) continue;
+
+                // Avoid platforms with an active enemy mouse
+                Transform enemy = p.transform.Find("Enemy");
+                if (enemy != null && enemy.gameObject.activeSelf) continue;
+
+                // Avoid platforms adjacent to active wall spikes
+                if (WallManager.Instance != null && WallManager.Instance.IsSpikeNear(p.transform.position.x, py, 1.35f)) continue;
+
+                float dist = Mathf.Abs(py - targetCenterY);
+                if (dist < bestDistToCenter)
+                {
+                    bestDistToCenter = dist;
+                    bestPlatform = p;
+                }
+            }
+
+            if (bestPlatform != null)
+            {
+                float halfHeight = bestPlatform.transform.localScale.y * 1.28f * 0.5f;
+                respawnPos = new Vector3(bestPlatform.transform.position.x, bestPlatform.transform.position.y + halfHeight + 0.35f, 0f);
+                return true;
+            }
+
+            respawnPos = new Vector3(0f, targetCenterY, 0f);
             return false;
         }
     }

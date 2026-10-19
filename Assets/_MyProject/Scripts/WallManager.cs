@@ -27,8 +27,39 @@ namespace MyProject
         private List<List<GameObject>> rightSpikesList = new List<List<GameObject>>();
 
         private Transform cameraTransform;
+        private float spikeSuppressionY = float.NegativeInfinity;
 
         public static WallManager Instance { get; private set; }
+
+        public void SetSpikeSuppressionUntil(float yThreshold)
+        {
+            spikeSuppressionY = yThreshold;
+            DeactivateSpikesBelow(yThreshold);
+        }
+
+        private void DeactivateSpikesBelow(float yThreshold)
+        {
+            DeactivateListBelow(leftSpikesList, yThreshold);
+            DeactivateListBelow(rightSpikesList, yThreshold);
+        }
+
+        private void DeactivateListBelow(List<List<GameObject>> spikesList, float yThreshold)
+        {
+            if (spikesList == null) return;
+            for (int i = 0; i < spikesList.Count; i++)
+            {
+                var list = spikesList[i];
+                if (list == null) continue;
+                for (int j = 0; j < list.Count; j++)
+                {
+                    GameObject sp = list[j];
+                    if (sp != null && sp.activeSelf && sp.transform.position.y < yThreshold)
+                    {
+                        sp.SetActive(false);
+                    }
+                }
+            }
+        }
 
         private void Awake()
         {
@@ -169,8 +200,8 @@ namespace MyProject
         {
             List<GameObject> segmentSpikes = new List<GameObject>();
             
-            // Create 2 spike GameObjects per wall segment
-            for (int i = 0; i < 2; i++)
+            // Pool 4 spike GameObjects per wall segment (DifficultyDirector activates 1..4 based on altitude)
+            for (int i = 0; i < 4; i++)
             {
                 GameObject spikeGo = new GameObject(isLeft ? "LeftSpike" : "RightSpike");
                 spikeGo.transform.SetParent(transform); // Parent is WallManager (scale 1, 1, 1) to avoid non-uniform scale shear
@@ -216,14 +247,31 @@ namespace MyProject
             // Right inner boundary = 2.6125. Subtracting half-width (0.25) -> 2.3625.
             float targetX = isLeft ? -2.3625f : 2.3625f;
 
-            // Platform height is 10. Segment goes from segmentY - 5.0 to segmentY + 5.0.
-            // Randomize Y in two separate halves of the segment to keep them nicely spaced.
+            int maxSlots = DifficultyDirector.Instance != null
+                ? Mathf.Clamp(DifficultyDirector.Instance.GetMaxSpikesPerSegment(segmentY), 1, spikes.Count)
+                : 2;
+            float activationChance = DifficultyDirector.Instance != null
+                ? DifficultyDirector.Instance.GetSpikeActivationChance(segmentY)
+                : 0.5f;
 
-            // Spike 1 (Lower half of the segment)
-            PositionSingleSpike(spikes[0], targetX, segmentY - 4.0f, segmentY - 1.0f, isLeft);
+            // Usable vertical band inside the 10-unit segment: [segmentY - 4.2, segmentY + 4.2]
+            float bandBottom = segmentY - 4.2f;
+            float bandTop = segmentY + 4.2f;
+            float slotSpan = (bandTop - bandBottom) / maxSlots;
 
-            // Spike 2 (Upper half of the segment)
-            PositionSingleSpike(spikes[1], targetX, segmentY + 1.0f, segmentY + 4.0f, isLeft);
+            for (int i = 0; i < spikes.Count; i++)
+            {
+                if (i < maxSlots)
+                {
+                    float slotMinY = bandBottom + i * slotSpan + 0.25f;
+                    float slotMaxY = bandBottom + (i + 1) * slotSpan - 0.25f;
+                    PositionSingleSpike(spikes[i], targetX, slotMinY, slotMaxY, isLeft, activationChance);
+                }
+                else
+                {
+                    spikes[i].SetActive(false);
+                }
+            }
         }
 
         /// <summary>
@@ -328,9 +376,15 @@ namespace MyProject
             return false;
         }
 
-        private void PositionSingleSpike(GameObject spike, float targetX, float minY, float maxY, bool isLeft)
+        private void PositionSingleSpike(GameObject spike, float targetX, float minY, float maxY, bool isLeft, float activationChance = 0.5f)
         {
-            bool wantsActive = Random.value <= 0.5f;
+            if (maxY < spikeSuppressionY)
+            {
+                spike.SetActive(false);
+                return;
+            }
+
+            bool wantsActive = Random.value <= activationChance;
             if (!wantsActive)
             {
                 float defaultY = (minY + maxY) * 0.5f;

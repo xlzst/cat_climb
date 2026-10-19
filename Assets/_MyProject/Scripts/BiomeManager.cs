@@ -47,6 +47,10 @@ namespace MyProject
 
         private void OnDestroy()
         {
+            if (GameManager.Instance != null)
+            {
+                GameManager.Instance.OnGameStateChanged -= HandleGameStateChanged;
+            }
             if (Instance == this)
             {
                 Instance = null;
@@ -77,6 +81,7 @@ namespace MyProject
                 {
                     targetCamera.backgroundColor = biomes[0].skyColor;
                 }
+                AudioManager.Instance?.PlayBiomeMusic(0);
             }
         }
 
@@ -109,21 +114,19 @@ namespace MyProject
                 highestReachedBiomeIndex = activeIndex;
                 currentBiomeIndex = activeIndex;
 
-                // Announce new biome
+                // Announce new biome and crossfade to its chiptune track
                 if (GameManager.Instance != null && GameManager.Instance.CurrentState == GameState.Playing)
                 {
                     BiomeTier reached = biomes[activeIndex];
-                    UI.GameplayHUDUI hud = FindFirstObjectByType<UI.GameplayHUDUI>();
-                    if (hud != null)
-                    {
-                        hud.ShowToast($"BIOME: {reached.name}!", new Color(0.9f, 0.7f, 1f, 1f));
-                    }
+                    UI.UIManager.Instance?.ShowToast($"BIOME: {reached.name}!", new Color(0.9f, 0.7f, 1f, 1f));
                     AudioManager.Instance?.PlayStreak();
+                    AudioManager.Instance?.PlayBiomeMusic(activeIndex);
                 }
             }
-            else
+            else if (activeIndex != currentBiomeIndex)
             {
                 currentBiomeIndex = activeIndex;
+                AudioManager.Instance?.PlayBiomeMusic(currentBiomeIndex);
             }
 
             // Smoothly interpolate sky background color
